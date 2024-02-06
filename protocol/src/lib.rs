@@ -1,5 +1,6 @@
-pub mod osc_messages;
+pub mod osc_messages_in;
 pub mod vrl_packet;
+mod osc_messages_out;
 
 /// The source (or destination) for a message.
 /// The int associated with the user represents their user ID,
