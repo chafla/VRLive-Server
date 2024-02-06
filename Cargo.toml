@@ -1,6 +1,6 @@
 [workspace]
 
-members = ["protocol"]
+members = ["protocol", "server"]
 default-members = ["protocol"]
 
 [package]
