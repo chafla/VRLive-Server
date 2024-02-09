@@ -1,8 +1,12 @@
 pub mod osc_messages_in;
 pub mod vrl_packet;
 pub mod osc_messages_out;
+pub mod handshake;
 
 use tokio::sync::mpsc;
+use rosc::OscMessage;
+
+type USER_ID_TYPE = u16;
 
 /// The source (or destination) for a message.
 /// The int associated with the user represents their user ID,
@@ -30,10 +34,18 @@ pub struct AudienceChannels {
 
 #[derive(Clone, Copy)]
 pub struct UserData {
-    participant_id: u16, // you better not have this many people
+    participant_id: USER_ID_TYPE, // you better not have this many people
     remote_port: u16,
     local_port: u16,
     remote_ip_addr: u32,
+}
 
 
+/// A message with this trait can be easily encoded to OSC.
+pub trait OSCEncodable {
+    /// Get the prefix for this OSC struct.
+    fn get_prefix() -> String;
+
+    /// Create a message from a variant of this value.
+    fn to_message(&self, existing_prefix: Vec<String>) -> OscMessage;
 }

@@ -86,7 +86,7 @@ impl Server {
         // backing track out -- TCP routed
         let (backingTrackSend, backingTrackRecv) = oneshot::channel::<BackingTrackData>();
 
-        let userData = ServerUserData {
+        let user_data = ServerUserData {
             base_user_data: data, 
             backing_track_update_send: backingTrackSend, 
             server_event_update_send: serverEventOutSend
@@ -126,30 +126,41 @@ impl Server {
 
 /// Trait defining the necessary behavior for a client of our server.
 pub trait VRLCLient {
-    /// Initialize this connection, spinning off all of the necessary threads.
-    fn create_connection();
+    /// Initialize this connection, creating the necessary channels.
+    fn create_connection(user_data: ServerUserData);
+
+    /// Start all of the main channel tasks.
+    fn start_main_channels();
 
     /// Listener thread for incoming motion capture events.
     /// These events will be forwarded through a channel to the main server's motion capture thread.
-    fn mocap_listener(mocap_sender: Sender<VRLOSCPacket>);
+    fn mocap_listener(&self, mocap_sender: Sender<VRLOSCPacket>);
 
     /// Listener thread for incoming audio events.
     /// This will also be forwarded to the main server's mocap thread.
     /// Note that this may return early if we aren't handling any audio data.
-    fn audio_listener();  // TODO
+    fn audio_listener(&self);  // TODO
 
     /// Thread handling output for any server events.
-    fn server_event_sender();
+    fn server_event_sender(&self);
 
     /// Thread handling input for any client events.
-    fn client_event_listener();
+    fn client_event_listener(&self);
 
     /// Thread responsible for updating the backing track as needed.
-    fn backing_track_sender();
+    fn backing_track_sender(&self);
 }
 
 pub struct AudienceConnection {
-
+    
 }
+
+// impl VRLCLient for AudienceConnection {
+//     fn create_connection(user_data: ServerUserData) {
+//         return AudienceConnection {
+
+//         }
+//     }
+// }
 
 // pub struct 
