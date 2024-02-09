@@ -1,14 +1,21 @@
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
-}
+use protocol::{osc_messages_out::ServerMessage, UserData};
+use tokio::sync::{mpsc, oneshot};
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+mod server;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
+
+
+/// As-of-yet-undetermined data format that will combine both audio data and mocap data.
+type OutputData = ();
+
+/// Data that will be sent along for backing track messages.
+/// Will probably just be a string describing the local file path for the song in use
+type BackingTrackData = String;
+
+
+
+
+enum RemoteUserType {
+    Audience,
+    Server,
 }
