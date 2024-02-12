@@ -5,10 +5,11 @@ use crate::{osc_messages_in::PerformerToggle, OSCDecodable, OSCEncodable};
 use rosc::{OscMessage, OscType};
 
 
+#[derive(PartialEq, Debug)]
 pub enum ServerMessage {
     Scene(SceneMessage),
     Timing,  // TODO
-    Performer,
+    Performer(PerformerServerMessage),
     Backing(BackingMessage)
 }
 
@@ -17,38 +18,56 @@ impl OSCEncodable for ServerMessage {
         "server".to_owned()
     }
 
+    fn variant_prefix(&self) -> String {
+        match self {
+            Self::Scene(_) => "scene",
+            Self::Timing => "timing",
+            Self::Performer(_) => "performer",
+            Self::Backing(_) => "backing"
+        }.to_owned()
+    }
+
     fn to_message(&self, mut existing_prefix: Vec<String>) -> rosc::OscMessage {
         existing_prefix.push(Self::base_prefix());
         match self {
             Self::Scene(msg) => msg.to_message(existing_prefix),
             Self::Timing => todo!(),
-            Self::Performer => todo!(),
-            Self::Backing(bm) => todo!()
+            Self::Performer(psm) => psm.to_message(existing_prefix),
+            Self::Backing(_) => todo!()
 
         }
-    }
-
-    fn variant_prefix(&self) -> String {
-        match self {
-            Self::Scene(_) => "scene",
-            Self::Timing => "timing",
-            Self::Performer => "performer",
-            Self::Backing(_) => "backing"
-        }.to_owned()
     }
 }
 
 impl OSCDecodable for ServerMessage {
     fn deconstruct_osc(prefix: &str, message: &OscMessage) -> Option<Self> {
-        if let Some((start, rest)) = prefix.split_once("/") {
+        dbg!(&prefix);
+        // this one is special, since it starts the hierarchy
+        // TODO come up with a better way to do this
+        let trimmed_prefix = if let Some((start, rest)) = prefix.split_once("/") {
+            if (start != "server") {
+                println!("Server was given an invalid string.");
+
+                return None
+            }
+
+            Some(rest)
+        }
+        else {
+            None
+        };
+
+
+        if let Some((start, rest)) = trimmed_prefix?.split_once("/") {
             match start {
                 "scene" => Some(Self::Scene(SceneMessage::deconstruct_osc(rest, message)?)),
+                "performer" => Some(Self::Performer(PerformerServerMessage::deconstruct_osc(rest, message)?)),
                 _ => None,
             }
         }
         else {
             match prefix {
-                "performer" | "timing" | "backing" => todo!(),
+                "timing" | "backing" => todo!(),
                 _ => None
             }
         }
@@ -56,6 +75,7 @@ impl OSCDecodable for ServerMessage {
 }
 
 /// Messages relating to the scene itself
+#[derive(PartialEq, Debug)]
 pub enum SceneMessage {
     State(i32)
 }
@@ -65,6 +85,12 @@ impl OSCEncodable for SceneMessage {
         "scene".to_owned()
     }
 
+    fn variant_prefix(&self) -> String {
+        match self {
+            Self::State(_) => "state"
+        }.to_owned()
+    }
+
     fn to_message(&self, mut existing_prefix: Vec<String>) -> rosc::OscMessage {
         existing_prefix.push(Self::base_prefix());
         existing_prefix.push(self.variant_prefix());
@@ -72,12 +98,6 @@ impl OSCEncodable for SceneMessage {
         match self {
             Self::State(state_num) => rosc::OscMessage { addr: pfx, args: vec![OscType::Int(*state_num)] }
         }
-    }
-
-    fn variant_prefix(&self) -> String {
-        match self {
-            Self::State(_) => "state"
-        }.to_owned()
     }
 }
 
@@ -98,6 +118,7 @@ impl OSCDecodable for SceneMessage {
     }
 }
 
+#[derive(PartialEq, Debug)]
 pub enum BackingMessage {
     Stop,
     /// At which timestamp should we start? If negative, start from the beginning.
@@ -111,6 +132,14 @@ impl OSCEncodable for BackingMessage {
         "backing".to_owned()
     }
 
+    fn variant_prefix(&self) -> String {
+        match self {
+            Self::Start(_) => "start",
+            Self::Stop => "stop",
+            Self::New(_) => "new"
+        }.to_owned()
+    }
+
     fn to_message(&self, mut existing_prefix: Vec<String>) -> rosc::OscMessage {
         existing_prefix.push(Self::base_prefix());
         existing_prefix.push(self.variant_prefix());
@@ -120,14 +149,6 @@ impl OSCEncodable for BackingMessage {
             Self::Stop => rosc::OscMessage {addr: pfx, args: vec![]},
             Self::New(new_song) => rosc::OscMessage {addr: pfx, args: vec![OscType::String(new_song.clone())]}
         }
-    }
-
-    fn variant_prefix(&self) -> String {
-        match self {
-            Self::Start(_) => "start",
-            Self::Stop => "stop",
-            Self::New(_) => "new"
-        }.to_owned()
     }
 }
 
@@ -161,7 +182,8 @@ impl OSCDecodable for BackingMessage {
 /// also represents the messages being sent to the performer from the server.
 /// still kind of a TODO item
 
-pub enum PerformerClientMessage {
+#[derive(PartialEq, Debug)]
+pub enum PerformerServerMessage {
     Ready(bool),
     Toggle(PerformerToggle),
     MatchMake(MatchMakeMessage)
@@ -169,7 +191,7 @@ pub enum PerformerClientMessage {
 
 
 
-impl OSCEncodable for PerformerClientMessage {
+impl OSCEncodable for PerformerServerMessage {
     fn base_prefix() -> String {
         "performer".to_owned()
     }
@@ -198,7 +220,7 @@ impl OSCEncodable for PerformerClientMessage {
     }
 }
 
-impl OSCDecodable for PerformerClientMessage {
+impl OSCDecodable for PerformerServerMessage {
     fn deconstruct_osc(prefix: &str, message: &OscMessage) -> Option<Self> {
         if let Some((start, rest)) = prefix.split_once("/") {
             match start {
@@ -220,6 +242,7 @@ impl OSCDecodable for PerformerClientMessage {
 }
 
 
+#[derive(PartialEq, Debug)]
 pub enum MatchMakeMessage {
     Request
 }
@@ -257,5 +280,29 @@ impl OSCDecodable for MatchMakeMessage {
             _ => None
         }
 
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::osc_messages_in::ClientMessage;
+    use super::*;
+
+    #[test]
+    fn try_create_server_message() {
+        let message = ServerMessage::Performer(PerformerServerMessage::Ready(true));
+
+        let encoded = message.to_message(vec!["".to_owned()]);
+        let unencoded = ServerMessage::from_osc_message(&encoded);
+        dbg!(&unencoded);
+        if let Some(server_msg) = &unencoded {
+            let reencoded = server_msg.to_message(vec!["".to_owned()]);
+            let reunencoded = ServerMessage::from_osc_message(&reencoded);
+            assert_eq!(reencoded.addr, encoded.addr);
+            assert_eq!(&reunencoded, &unencoded);
+        }
+        else {
+            panic!("Object was not re-encoded")
+        }
     }
 }

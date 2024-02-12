@@ -488,7 +488,9 @@ name = "vrlive-server"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "protocol",
  "rosc",
+ "server",
 ]
 
 [[package]]

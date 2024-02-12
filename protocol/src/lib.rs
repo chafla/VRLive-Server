@@ -56,8 +56,14 @@ pub trait OSCEncodable {
 /// A message with this trait can, similarly, be easily decoded from OSC.
 pub trait OSCDecodable : Sized {
 
+    /// Decode from an OSC message. This is probably the method that you want to call.
     fn from_osc_message(message: &OscMessage) -> Option<Self> {
-        return Self::deconstruct_osc(&message.addr, message);
+        let offset = if message.addr.chars().next()? == '/' {1} else {0};
+        // trim off the leading slash
+        dbg!(message);
+        return Self::deconstruct_osc(&message.addr[offset..], message);
     }
+
+    /// Step through an OSC message
     fn deconstruct_osc(prefix: &str, message: &OscMessage) -> Option<Self>;
 }

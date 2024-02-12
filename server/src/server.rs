@@ -59,11 +59,11 @@ struct Server {
     /// Output channel coming from each synchronizer and going to the high-priority output thread.
     pub synced_data_out_send: mpsc::Sender<VRTPPacket>, // TODO add the type here
 
-    /// 
-    pub client_event_in: mpsc::Sender<dyn OSCEncodable>,
+    ///
+    // pub client_event_in: mpsc::Sender<dyn OSCEncodable>,
 
     ///
-    synced_data_out_recv: mpsc::Receiver<OutputData>,
+    // synced_data_out_recv: mpsc::Receiver<OutputData>,
 
     /// Client events should be sent from their constituent threads through this
     pub client_event_in_send: mpsc::Sender<ServerMessage>,

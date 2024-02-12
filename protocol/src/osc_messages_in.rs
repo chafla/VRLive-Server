@@ -7,6 +7,7 @@ use rosc::{decoder, OscBundle, OscMessage, OscPacket, OscType};
 use crate::vrl_packet::RawVRLOSCPacket;
 
 
+#[derive(PartialEq, Debug)]
 pub enum ClientMessage {
     Any,
     Audience,
@@ -56,6 +57,7 @@ impl OSCDecodable for ClientMessage {
     }
 }
 
+#[derive(PartialEq, Debug)]
 pub enum PerformerToggle {
     Audio(bool),
     Actor(bool),
@@ -114,6 +116,7 @@ impl OSCDecodable for PerformerToggle {
     }
 }
 
+#[derive(PartialEq, Debug)]
 pub enum PerformerClientMessage {
     Ready(bool),
     Toggle(PerformerToggle)
@@ -171,5 +174,28 @@ impl OSCDecodable for PerformerClientMessage {
         }
 
 
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn try_create_client_message() {
+        let message = ClientMessage::Performer(PerformerClientMessage::Ready(true));
+
+        let encoded = message.to_message(vec!["".to_owned()]);
+        let unencoded = ClientMessage::from_osc_message(&encoded);
+        dbg!(&unencoded);
+        if let Some(server_msg) = &unencoded {
+            let reencoded = server_msg.to_message(vec!["".to_owned()]);
+            let reunencoded = ClientMessage::from_osc_message(&reencoded);
+            assert_eq!(reencoded.addr, encoded.addr);
+            assert_eq!(&reunencoded, &unencoded);
+        }
+        else {
+            panic!("Object was not re-encoded")
+        }
     }
 }
