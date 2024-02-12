@@ -1,7 +1,7 @@
 // These pertain to messages that we will be receiving from clients,
 // and should be prefixed with /client
 
-use crate::{OSCEncodable, VRLUser};
+use crate::{OSCDecodable, OSCEncodable, VRLUser};
 use rosc::decoder::{decode_tcp, decode_udp};
 use rosc::{decoder, OscBundle, OscMessage, OscPacket, OscType};
 use crate::vrl_packet::RawVRLOSCPacket;
@@ -14,16 +14,44 @@ pub enum ClientMessage {
 }
 
 impl OSCEncodable for ClientMessage {
-    fn get_prefix() -> String {
+    fn base_prefix() -> String {
         "client".to_owned()
     }
+
+    fn variant_prefix(&self) -> String {
+        match self {
+            Self::Any => "any",
+            Self::Audience => "audience",
+            Self::Performer(_) => "performer",
+        }.to_owned()
+    }
+
 
     fn to_message(&self, addr: Vec<String>) -> rosc::OscMessage {
         match self {
             Self::Performer(pcm) => pcm.to_message(addr),
-            Self::Audience => unimplemented!(),
-            Self::Any => unimplemented!(),
+            Self::Audience => todo!(),
+            Self::Any => todo!(),
             _ => todo!()
+        }
+    }
+
+}
+
+impl OSCDecodable for ClientMessage {
+    fn deconstruct_osc(working_str: &str, message: &OscMessage) -> Option<Self>
+    {
+        // TODO add testing to ensure that the deconstructed prefix matches the constructed prefix
+        if let Some((start, rest)) = working_str.split_once("/") {
+            match start {
+                "any" => todo!(),
+                "audience" => todo!(),
+                "performer" => Some(Self::Performer(PerformerClientMessage::deconstruct_osc(rest, message)?)),
+                _ => None,
+            }
+        }
+        else {
+            None
         }
     }
 }
@@ -35,24 +63,53 @@ pub enum PerformerToggle {
 }
 
 impl OSCEncodable for PerformerToggle {
-    fn get_prefix() -> String {
+    fn base_prefix() -> String {
         "toggle".to_owned()
     }
 
-    fn to_message(&self, mut existing_prefix: Vec<String>) -> OscMessage {
-        existing_prefix.push(Self::get_prefix());
-        let (prefix, val) = match self {
-            Self::Audio(b) => ("audio", *b),
-            Self::Actor(b) => ("actor", *b),
-            Self::Motion(b) => ("motion", *b),
-        };
+    fn variant_prefix(&self) -> String {
+        match self {
+            Self::Audio(_) => "audio",
+            Self::Actor(_) => "actor",
+            Self::Motion(_) => "motion",
+        }.to_owned()
+    }
 
-        // this to_owned feels unnecessary
-        existing_prefix.push(prefix.to_owned());
+    fn to_message(&self, mut existing_prefix: Vec<String>) -> OscMessage {
+        existing_prefix.push(Self::base_prefix());
+        existing_prefix.push(self.variant_prefix());
+        let (val) = match self {
+            Self::Audio(b) | Self::Actor(b) | Self::Motion(b) => *b
+        };
 
         return rosc::OscMessage {
             addr: existing_prefix.join("/"),
             args: vec![OscType::Bool(val)]
+        }
+    }
+}
+
+impl OSCDecodable for PerformerToggle {
+    fn deconstruct_osc(prefix: &str, message: &OscMessage) -> Option<Self> {
+        if let Some((start, _)) = prefix.split_once("/") {
+            // if there's a split, the character was in the string
+            if (message.args.len() != 1) {
+                None
+            }
+            else if let OscType::Bool(b) = message.args[0] {
+                match start {
+                    "audio" => Some(Self::Audio(b)),
+                    "actor" => Some(Self::Actor(b)),
+                    "motion" => Some(Self::Motion(b)),
+                    _ => None
+                }
+            }
+            else {
+                None
+            }
+        }
+        else {
+            None
         }
     }
 }
@@ -65,20 +122,54 @@ pub enum PerformerClientMessage {
 
 
 impl OSCEncodable for PerformerClientMessage {
-    fn get_prefix() -> String {
+    fn base_prefix() -> String {
         "performer".to_owned()
     }
 
-    fn to_message(&self, mut addr: Vec<String>) -> rosc::OscMessage {
-        let pfx = Self::get_prefix();
-        addr.push(pfx);
+    fn variant_prefix(&self) -> String {
+        match self {
+            Self::Ready(_) => "ready",
+            Self::Toggle(_) => "toggle",
+        }.to_string()
+    }
+
+    fn to_message(&self, mut addr: Vec<String>) -> OscMessage {
+        addr.push(Self::base_prefix());
+        addr.push(self.variant_prefix());
 
         match self {
-            Self::Ready(b) => rosc::OscMessage {
-                addr: addr.join("/") + "/ready",
+            Self::Ready(b) => OscMessage {
+                addr: addr.join("/"),
                 args: vec![OscType::Bool(*b)]
             },
             Self::Toggle(pt) => pt.to_message(addr)
         }
+    }
+}
+
+impl OSCDecodable for PerformerClientMessage {
+    fn deconstruct_osc(prefix: &str, message: &OscMessage) -> Option<Self> {
+
+        if let Some((start, rest)) = prefix.split_once("/") {
+            return match start {
+                "toggle" => Some(Self::Toggle(PerformerToggle::deconstruct_osc(rest, message)?)),
+                _ => None
+            }
+        }
+        else {
+            match prefix {
+                "ready" => {
+                    if let OscType::Bool(b) = message.args[0] {
+                        Some(Self::Ready(b))
+                    }
+                    else {
+                        None
+                    }
+                },
+                _ => None
+            }
+        }
+
+
     }
 }

@@ -1,23 +1,43 @@
 use std::sync::Arc;
+use std::sync::mpsc::Receiver;
 use tokio::sync::{mpsc::{self, Sender}, oneshot};
-use protocol::{osc_messages_out::ServerMessage, vrl_packet::VRLOSCPacket, UserData, VRLUser};
+use protocol::{osc_messages_out::ServerMessage, vrl_packet::VRLOSCPacket, UserData, VRLUser, OSCEncodable};
 
-use crate::{BackingTrackData, OutputData, RemoteUserType};
+use crate::{BackingTrackData, RemoteUserType};
 
 /// Maximum buffer size for the channel before we start to block
 const MAX_CHAN_SIZE: usize = 2 >> 12;
 
+type AudioPacket = ();  // TODO
+type VRTPPacket = ();
 
 
-/// Private struct storing some internal server-specific details alongside each user
+/// Data for the server side to keep track of for every managed client.
 struct ServerUserData {
     base_user_data: UserData,
     // Store some channels that need to be accessible from the outside for sending data in
     /// Send on this channel to update thread on new backing tracks.
     backing_track_update_send: oneshot::Sender<BackingTrackData>,
     /// Send on this channel to update thread with new server events.
-    server_event_update_send: mpsc::Sender<ServerMessage>
-    
+    server_event_update_send: Sender<ServerMessage>,
+}
+
+/// Client-specific channel data.
+/// Stored out in a separate struct for organization, especially since this data will be common to all client types.
+struct ClientChannelData {
+    /// Sending incoming mocap data to our synchronizer
+    mocap_out: Sender<VRLOSCPacket>,
+    /// Get events from the server's main event thread, to send out to a user
+    server_events_out: Receiver<VRLOSCPacket>,
+    /// Pass events from our client to the main server
+    client_events_in: Sender<VRLOSCPacket>,
+    // Performer clients manage their own synchronizer threads.
+    // This means that they may exist, or may not if we're an audience member.
+    synchronizer_osc_in: Option<Receiver<VRLOSCPacket>>,
+    synchronizer_audio_in: Option<Receiver<AudioPacket>>,
+    /// Sending data from the synchronizer to the server's output thread.
+    synchronizer_vrtp_out: Option<Sender<VRTPPacket>>,
+
 }
 
 impl ServerUserData {
@@ -35,10 +55,14 @@ struct Server {
     pub performers: Vec<VRLUser>,
     pub audience: Vec<VRLUser>,
 
-    /// Output channel for osc/audio data coming from performers and heading to the synchronizer.
-    /// Should be cloned across all threads.
-    pub synced_data_out_send: mpsc::Sender<OutputData>, // TODO add the type here
-    /// Corrolary to the above: this should only be used by the main synchronizing thread
+    // These channels are here because they need to be cloned by all new clients as common channels.
+    /// Output channel coming from each synchronizer and going to the high-priority output thread.
+    pub synced_data_out_send: mpsc::Sender<VRTPPacket>, // TODO add the type here
+
+    /// 
+    pub client_event_in: mpsc::Sender<dyn OSCEncodable>,
+
+    ///
     synced_data_out_recv: mpsc::Receiver<OutputData>,
 
     /// Client events should be sent from their constituent threads through this
@@ -47,6 +71,11 @@ struct Server {
     client_event_in_recv: mpsc::Receiver<ServerMessage>
 
     // due to how mpsc channels work, it's probably easier to include the music channel in 
+
+}
+
+/// A struct that collects all communication channels needed during the construction of the server.
+pub struct CommunicationChannels {
 
 }
 
@@ -86,8 +115,10 @@ impl Server {
         // backing track out -- TCP routed
         let (backingTrackSend, backingTrackRecv) = oneshot::channel::<BackingTrackData>();
 
+        // This is the data that the server needs to hold onto for every user.
         let user_data = ServerUserData {
-            base_user_data: data, 
+            base_user_data: data,
+            // server needs to update these channels to provide base user data.
             backing_track_update_send: backingTrackSend, 
             server_event_update_send: serverEventOutSend
         };
