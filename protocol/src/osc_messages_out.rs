@@ -45,7 +45,7 @@ impl OSCDecodable for ServerMessage {
         // this one is special, since it starts the hierarchy
         // TODO come up with a better way to do this
         let trimmed_prefix = if let Some((start, rest)) = prefix.split_once("/") {
-            if (start != "server") {
+            if start != "server" {
                 println!("Server was given an invalid string.");
 
                 return None
@@ -103,7 +103,7 @@ impl OSCEncodable for SceneMessage {
 
 impl OSCDecodable for SceneMessage {
     fn deconstruct_osc(prefix: &str, message: &OscMessage) -> Option<Self> {
-        if let Some((_)) = prefix.split_once("/") {
+        if let Some(_) = prefix.split_once("/") {
             None
         }
         else {

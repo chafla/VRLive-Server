@@ -7,12 +7,12 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::USER_ID_TYPE;
+use crate::UserIDType;
 
-enum HandshakeErrorVariant {
-    TimedOut,
-    InvalidServerState
-}
+// enum HandshakeErrorVariant {
+//     TimedOut,
+//     InvalidServerState
+// }
 
 #[derive(Serialize, Deserialize, Debug)]
 enum PacketUserType {
@@ -25,7 +25,7 @@ enum PacketUserType {
 #[derive(Serialize, Deserialize, Debug)]
 struct HandshakeAck {
     /// Informing of their user ID
-    user_id: USER_ID_TYPE,
+    user_id: UserIDType,
     /// Server identifier length in bytes
     user_identifier_length: u16,
     /// Pretty name for the server.
@@ -37,7 +37,7 @@ struct HandshakeSynAck {
     /// Identifier confirming their type -- performer or audience
     user_type: PacketUserType,
     /// Confirming own ID
-    user_id: USER_ID_TYPE,
+    user_id: UserIDType,
     /// Pretty name for the client
     own_identifier: String,
     /// Flags denoting the user's capabilities. These will consist of some known strings to denote things like mocap availability, microphone availability, etc.

@@ -31,7 +31,6 @@ impl OSCEncodable for ClientMessage {
             Self::Performer(pcm) => pcm.to_message(addr),
             Self::Audience => todo!(),
             Self::Any => todo!(),
-            _ => todo!()
         }
     }
 
@@ -78,7 +77,7 @@ impl OSCEncodable for PerformerToggle {
     fn to_message(&self, mut existing_prefix: Vec<String>) -> OscMessage {
         existing_prefix.push(Self::base_prefix());
         existing_prefix.push(self.variant_prefix());
-        let (val) = match self {
+        let val = match self {
             Self::Audio(b) | Self::Actor(b) | Self::Motion(b) => *b
         };
 
@@ -93,7 +92,7 @@ impl OSCDecodable for PerformerToggle {
     fn deconstruct_osc(prefix: &str, message: &OscMessage) -> Option<Self> {
         if let Some((start, _)) = prefix.split_once("/") {
             // if there's a split, the character was in the string
-            if (message.args.len() != 1) {
+            if message.args.len() != 1 {
                 None
             }
             else if let OscType::Bool(b) = message.args[0] {

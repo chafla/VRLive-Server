@@ -17,7 +17,7 @@ pub struct VRLOSCPacket {
 }
 
 impl From<RawVRLOSCPacket> for VRLOSCPacket {
-    fn from(value: RawVRLOSCPacket) -> Self {
+    fn from(_: RawVRLOSCPacket) -> Self {
         todo!()
     }
 }

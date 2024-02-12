@@ -5,7 +5,7 @@ pub mod vrl_packet;
 pub mod osc_messages_out;
 pub mod handshake;
 
-type USER_ID_TYPE = u16;
+type UserIDType = u16;
 
 /// The source (or destination) for a message.
 /// The int associated with the user represents their user ID,
@@ -33,7 +33,7 @@ pub struct AudienceChannels {
 
 #[derive(Clone, Copy)]
 pub struct UserData {
-    participant_id: USER_ID_TYPE, // you better not have this many people
+    participant_id: UserIDType, // you better not have this many people
     remote_port: u16,
     local_port: u16,
     remote_ip_addr: u32,
