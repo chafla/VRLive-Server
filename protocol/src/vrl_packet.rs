@@ -1,7 +1,6 @@
 use rosc::OscBundle;
+
 use crate::VRLUser;
-
-
 
 pub struct RawVRLOSCPacket {
     source_ip: u32,

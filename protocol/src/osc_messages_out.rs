@@ -1,9 +1,9 @@
 // these pertain to messages that we are sending out from the server
 // and will be prefixed /server
 
-use crate::{osc_messages_in::PerformerToggle, OSCDecodable, OSCEncodable};
 use rosc::{OscMessage, OscType};
 
+use crate::{osc_messages_in::PerformerToggle, OSCDecodable, OSCEncodable};
 
 #[derive(PartialEq, Debug)]
 pub enum ServerMessage {
@@ -285,7 +285,6 @@ impl OSCDecodable for MatchMakeMessage {
 
 #[cfg(test)]
 mod test {
-    use crate::osc_messages_in::ClientMessage;
     use super::*;
 
     #[test]

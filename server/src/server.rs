@@ -1,7 +1,8 @@
-use std::sync::Arc;
 use std::sync::mpsc::Receiver;
+
 use tokio::sync::{mpsc::{self, Sender}, oneshot};
-use protocol::{osc_messages_out::ServerMessage, vrl_packet::VRLOSCPacket, UserData, VRLUser, OSCEncodable};
+
+use protocol::{osc_messages_out::ServerMessage, UserData, vrl_packet::VRLOSCPacket, VRLUser};
 
 use crate::{BackingTrackData, RemoteUserType};
 

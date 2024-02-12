@@ -5,8 +5,9 @@
 
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
+
 use crate::USER_ID_TYPE;
-use serde::{Serialize, Deserialize};
 
 enum HandshakeErrorVariant {
     TimedOut,

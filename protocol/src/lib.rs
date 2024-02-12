@@ -1,10 +1,9 @@
+use rosc::OscMessage;
+
 pub mod osc_messages_in;
 pub mod vrl_packet;
 pub mod osc_messages_out;
 pub mod handshake;
-
-use tokio::sync::mpsc;
-use rosc::{OscMessage, OscType};
 
 type USER_ID_TYPE = u16;
 
