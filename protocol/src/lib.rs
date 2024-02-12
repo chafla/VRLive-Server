@@ -4,7 +4,7 @@ pub mod osc_messages_out;
 pub mod handshake;
 
 use tokio::sync::mpsc;
-use rosc::OscMessage;
+use rosc::{OscMessage, OscType};
 
 type USER_ID_TYPE = u16;
 
@@ -44,8 +44,20 @@ pub struct UserData {
 /// A message with this trait can be easily encoded to OSC.
 pub trait OSCEncodable {
     /// Get the prefix for this OSC struct.
-    fn get_prefix() -> String;
+    fn base_prefix() -> String;
+
+    /// Get the prefix for a specific instantiation of this struct.
+    fn variant_prefix(&self) -> String;
 
     /// Create a message from a variant of this value.
     fn to_message(&self, existing_prefix: Vec<String>) -> OscMessage;
+}
+
+/// A message with this trait can, similarly, be easily decoded from OSC.
+pub trait OSCDecodable : Sized {
+
+    fn from_osc_message(message: &OscMessage) -> Option<Self> {
+        return Self::deconstruct_osc(&message.addr, message);
+    }
+    fn deconstruct_osc(prefix: &str, message: &OscMessage) -> Option<Self>;
 }
