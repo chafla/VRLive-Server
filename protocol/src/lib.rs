@@ -5,7 +5,7 @@ pub mod vrl_packet;
 pub mod osc_messages_out;
 pub mod handshake;
 
-type UserIDType = u16;
+pub type UserIDType = u16;
 
 /// The source (or destination) for a message.
 /// The int associated with the user represents their user ID,
