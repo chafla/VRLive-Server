@@ -3,19 +3,17 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io;
-use std::net::{IpAddr, SocketAddr, SocketAddrV4};
-use std::str::FromStr;
+use std::net::SocketAddr;
 use std::sync::Arc;
-use serde::Serialize;
-use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc::{self, Sender, Receiver}, Mutex, oneshot, RwLock};
+
 // use serde_json::Result;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::{mpsc::{self, Receiver, Sender}, Mutex, oneshot, RwLock};
 
-use protocol::{osc_messages_out::ServerMessage, UserData, vrl_packet::VRLOSCPacket, VRLUser, UserIDType, handshake};
+use protocol::{osc_messages_out::ServerMessage, UserData, UserIDType, vrl_packet::VRLOSCPacket};
+use protocol::handshake::{HandshakeAck, HandshakeCompletion, HandshakeSynAck};
 use protocol::osc_messages_in::ClientMessage;
-
-use protocol::handshake::{HandshakeAck, HandshakeSynAck, HandshakeCompletion};
 use protocol::UserType::{Audience, Performer};
 
 use crate::{BackingTrackData, MAX_CHAN_SIZE, RemoteUserType, VRTPPacket};

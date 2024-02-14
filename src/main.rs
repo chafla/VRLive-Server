@@ -1,5 +1,6 @@
 use clap::{command, Parser};
-use server::server::{Server, PortMap};
+
+use server::server::{PortMap, Server};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
