@@ -7,56 +7,58 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::UserIDType;
+use crate::{UserIDType, UserType};
 
 // enum HandshakeErrorVariant {
 //     TimedOut,
 //     InvalidServerState
 // }
 
-#[derive(Serialize, Deserialize, Debug)]
-enum PacketUserType {
-    Audience = 1,
-    Performer = 2
-}
-
 
 /// Initial message sent in response to a new connection.
 #[derive(Serialize, Deserialize, Debug)]
-struct HandshakeAck {
+pub struct HandshakeAck {
     /// Informing of their user ID
     user_id: UserIDType,
-    /// Server identifier length in bytes
-    user_identifier_length: u16,
     /// Pretty name for the server.
     server_pretty_identifier: String,
 }
 
+impl HandshakeAck {
+    pub fn new(user_id: UserIDType, server_pretty_identifier: String) -> Self {
+        Self {
+            user_id,
+            server_pretty_identifier
+        }
+
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug)]
-struct HandshakeSynAck {
+pub struct HandshakeSynAck {
     /// Identifier confirming their type -- performer or audience
-    user_type: PacketUserType,
+    pub user_type: u16,
     /// Confirming own ID
-    user_id: UserIDType,
+    pub user_id: UserIDType,
     /// Pretty name for the client
-    own_identifier: String,
+    pub own_identifier: String,
     /// Flags denoting the user's capabilities. These will consist of some known strings to denote things like mocap availability, microphone availability, etc.
-    user_flags: Vec<String>,
+    pub user_flags: Vec<String>,
     /// Port made available for receiving backing track data.
-    backing_track_port: u16,
+    pub backing_track_port: u16,
     /// Port made available for receiving future server events after handshake completion.
-    server_event_port: u16,
+    pub server_event_port: u16,
     /// Port made available for receiving audience motion capture data.
-    audience_motion_capture_port: u16,
+    pub audience_motion_capture_port: u16,
     /// Additional, named ports that the client wishes to let the server know it is making available for data receipt.
-    extra_ports: HashMap<String, String>,
+    pub extra_ports: HashMap<String, u16>,
 }
 
 /// Last message of handshake, indicating that the server is okay and things are ready to go.
 #[derive(Serialize, Deserialize, Debug)]
-struct HandshakeCompletion {
+pub struct HandshakeCompletion {
     /// Ports for different services that should be made 
-    extra_ports: HashMap<String, String>
+    pub extra_ports: HashMap<String, u16>
 }
 
 

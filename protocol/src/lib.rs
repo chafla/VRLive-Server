@@ -1,4 +1,6 @@
+use std::net::IpAddr;
 use rosc::OscMessage;
+use serde::{Deserialize, Serialize};
 
 pub mod osc_messages_in;
 pub mod vrl_packet;
@@ -7,13 +9,21 @@ pub mod handshake;
 
 pub type UserIDType = u16;
 
+
+#[derive(Serialize, Deserialize, Debug)]
+pub enum UserType {
+    Audience,
+    Performer
+}
+
+
 /// The source (or destination) for a message.
 /// The int associated with the user represents their user ID,
 /// which should be unique per IP address.
 /// 
 /// If the associated value is Some, then it's assumed that it relates to a specific user.
 /// If it's None, then it's assumed that it pertains to all targets, and should be multicasted.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub enum VRLUser {
     Performer(Option<UserData>),
     Server,
@@ -31,12 +41,12 @@ pub struct AudienceChannels {
 }
 
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Debug)]
 pub struct UserData {
-    participant_id: UserIDType, // you better not have this many people
-    remote_port: u16,
-    local_port: u16,
-    remote_ip_addr: u32,
+    pub participant_id: UserIDType, // you better not have this many people
+    pub fancy_title: String,
+    pub remote_port: u16,
+    pub remote_ip_addr: IpAddr,
 }
 
 
