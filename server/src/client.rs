@@ -4,11 +4,12 @@ use std::sync::{Arc, RwLock};
 
 use log::{debug, warn};
 use rosc::{encoder, OscPacket};
-use tokio::io::AsyncWriteExt;
-use tokio::net::TcpSocket;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpSocket, TcpStream};
+use tokio::select;
 use tokio::sync::mpsc::{Receiver, Sender};
 
-use protocol::{OSCEncodable, UserData};
+use protocol::{OSCDecodable, OSCEncodable, UserData};
 use protocol::osc_messages_in::ClientMessage;
 use protocol::osc_messages_out::ServerMessage;
 use protocol::vrl_packet::VRLOSCPacket;
@@ -43,16 +44,30 @@ impl VRLClient for AudienceMember {
         if server_event_sender.is_none() {
             panic!("Server event sender was yoinked before it was needed.")
         }
-        let server_port = self.ports.server_event_port;
-        let user_data = self.user_data.clone();
 
-        tokio::spawn(async move {
-            Self::server_event_sender(server_event_sender.unwrap(), server_port, user_data).await
-        });
+        // server events
+        {
+
+            let server_port = self.ports.server_event_port;
+            let user_data = self.user_data.clone();
+
+            tokio::spawn(async move {
+                Self::server_event_sender(server_event_sender.unwrap(), server_port, user_data).await
+            });
+        }
+
+        {
+            let client_event_chan = self.base_channels.client_events_in;
+            let client_sock_chan = self.base_channels.client_event_socket_chan;
+            tokio::spawn(async move {
+                Self::client_event_listener(client_event_chan, client_sock_chan).await
+            });
+        }
     }
 
     /// Task responsible for sending out server events.
     async fn server_event_sender(mut sender_in: Receiver<ServerMessage>, server_event_port: u16, user_data: UserData) {
+        debug!("Attempting to connect to server event channel on {0}", &user_data.fancy_title);
         let sock = TcpSocket::new_v4().unwrap();
         let target_addr = SocketAddr::new(user_data.remote_ip_addr, server_event_port);
         let mut stream = match sock.connect(target_addr).await {
@@ -63,12 +78,14 @@ impl VRLClient for AudienceMember {
             }
         };
 
+        debug!("Spinning up server event handler for {0}", &user_data.fancy_title);
+
         loop {
             let res = sender_in.recv().await;
 
             // our server has been killed!
             if let None = res {
-                debug!("Sender for {0} has been destroyed.", user_data.fancy_title);
+                debug!("Sender for {0} has been destroyed.", &user_data.fancy_title);
                 return;
             }
 
@@ -97,8 +114,67 @@ impl VRLClient for AudienceMember {
     }
 
     /// Task responsible for listening for incoming client events.
-    async fn client_event_listener(&self) {
-        todo!()
+    async fn client_event_listener(mut client_events_out: Sender<ClientMessage>, mut client_socket: Receiver<TcpStream>) {
+
+        // loop: if we lose connection, we can just have the client give us a new handle.
+        // unless that one's dead too.
+        loop {
+            let client_stream = client_socket.recv().await;
+            if client_stream.is_none() {
+                debug!("Client event listener shutting down.");
+                break;
+            }
+            else {
+                debug!("Client event listener is up and ready")
+            }
+            let mut client_stream = client_stream.unwrap();
+
+            let mut client_event_buf: [u8; 1024];
+
+            'connection: loop {
+                client_event_buf = [0; 1024];
+                let recv = client_stream.read(&mut client_event_buf).await;
+                let incoming_bytes = match recv {
+                    Err(e) => {
+                        warn!("Client stream failed on read ({e}). May be closed?");
+                        break 'connection;
+                    },
+                    Ok(b) => {
+                        if b == 0 {
+                            continue
+                        }
+                        b
+                    }
+                };
+                let read_bytes = &client_event_buf[0..incoming_bytes];
+                debug!("Received client event bytes: {0:?}", read_bytes);
+
+                let res = rosc::decoder::decode_tcp_vec(read_bytes);
+                if res.is_err() {
+                    warn!("Client event channel got an invalid data stream!");
+                    continue;
+                }
+                let (rest, packets) = res.unwrap();
+                if !rest.is_empty() {
+                    debug!("Client message had trailing data: {0:?}", rest)
+                }
+                let packets = packets.iter().filter_map(|pkt| {
+                    match pkt {
+                        OscPacket::Message(msg) => ClientMessage::from_osc_message(msg),
+                        OscPacket::Bundle(_) => unimplemented!()  // maybe?
+                    }
+                });
+                let packets = Vec::from_iter(packets.into_iter());
+
+                for pkt in packets {
+                    let _ = client_events_out.send(pkt).await;
+                }
+
+            }
+            // select! {
+            //
+            // }
+        }
     }
 
     /// Task responsible for monitoring the server's backing track channel, and
@@ -118,9 +194,11 @@ pub struct ClientChannelData {
     /// This is an option as it must be taken, otherwise it will tie up the whole data structure.
     pub server_events_out: Option<Receiver<ServerMessage>>,
     /// Get backing track data to send out to our connected server.
-    pub backing_track_in: tokio::sync::oneshot::Receiver<BackingTrackData>,
+    pub backing_track_in: Receiver<BackingTrackData>,
     /// Pass events from our client to the main server
     pub client_events_in: Sender<ClientMessage>,
+    /// Get our client event socket from the server
+    pub client_event_socket_chan: Receiver<TcpStream>,
 
     // channels dependent on the synchronizer, thus may exist depending on the type of client that we are
 
@@ -133,11 +211,12 @@ pub struct ClientChannelData {
 }
 
 impl ClientChannelData {
-    pub fn new(server_events_out: Receiver<ServerMessage>, client_events_in: Sender<ClientMessage>, backing_track_in: tokio::sync::oneshot::Receiver<BackingTrackData>) -> Self {
+    pub fn new(server_events_out: Receiver<ServerMessage>, client_events_in: Sender<ClientMessage>, backing_track_in: Receiver<BackingTrackData>, event_socket_chan: Receiver<TcpStream>) -> Self {
         Self {
             server_events_out: Some(server_events_out),
             client_events_in,
             backing_track_in,
+            client_event_socket_chan: event_socket_chan,
             synchronizer_osc_in: None,
             synchronizer_audio_in: None,
             synchronizer_vrtp_out: None
@@ -180,7 +259,8 @@ pub trait VRLClient {
     async fn server_event_sender(sender_in: Receiver<ServerMessage>, server_event_port: u16, user_data: UserData);
 
     /// Thread handling input for any client events.
-    async fn client_event_listener(&self);
+    /// This will become the new "main" thread for the server keeping it alive.
+    async fn client_event_listener(client_events_out: Sender<ClientMessage>, client_socket: Receiver<TcpStream>);
 
     /// Thread responsible for updating the backing track as needed.
     async fn backing_track_sender(&self);

@@ -1,6 +1,7 @@
 // these pertain to messages that we are sending out from the server
 // and will be prefixed /server
 
+use log::error;
 use rosc::{OscMessage, OscType};
 
 use crate::{osc_messages_in::PerformerToggle, OSCDecodable, OSCEncodable};
@@ -46,7 +47,7 @@ impl OSCDecodable for ServerMessage {
         // TODO come up with a better way to do this
         let trimmed_prefix = if let Some((start, rest)) = prefix.split_once("/") {
             if start != "server" {
-                println!("Server was given an invalid string.");
+                error!("Server was given an invalid string.");
 
                 return None
             }

@@ -1,19 +1,22 @@
 // use std::sync::mpsc::Receiver;
 
 use std::borrow::Cow;
+use std::char::MAX;
 use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use log::{debug, error, info, warn};
 
 // use serde_json::Result;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpSocket, TcpStream};
 use tokio::sync::{mpsc::{self, Receiver, Sender}, Mutex, oneshot, RwLock};
 
 use protocol::{osc_messages_out::ServerMessage, UserData, UserIDType};
 use protocol::handshake::{HandshakeAck, HandshakeCompletion, HandshakeSynAck};
 use protocol::osc_messages_in::ClientMessage;
+use protocol::osc_messages_out::PerformerServerMessage;
 use protocol::UserType::{Audience, Performer};
 
 use crate::{BackingTrackData, MAX_CHAN_SIZE, VRTPPacket};
@@ -22,16 +25,28 @@ use crate::client::{AudienceMember, ClientChannelData, ClientPorts, VRLClient};
 const HANDSHAKE_BUF_SIZE: usize = 2048;
 
 
+/// Messages which can be sent over the client message socket.
+enum ClientChannelMessage {
+    /// A socket representing a new initialization.
+    /// Should be sent once and only once.
+    /// TODO we could do something fancy here with typed channels!
+    Socket(TcpSocket),
+    Message(ClientMessage)
+}
+
+
 /// Data tracked per client.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ServerUserData {
     user_type: protocol::UserType,
     base_user_data: UserData,
     // Store some channels that need to be accessible from the outside for sending data in
     /// Send on this channel to update thread on new backing tracks.
-    backing_track_update_send: oneshot::Sender<BackingTrackData>,
+    backing_track_update_send: Sender<BackingTrackData>,
     /// Send on this channel to update thread with new server events.
     server_event_update_send: Sender<ServerMessage>,
+    /// Send a connected socket on this channel when a new client event channel is established.
+    client_event_socket_send: Sender<TcpStream>,
 }
 
 // TODO lay this out!
@@ -41,18 +56,20 @@ pub struct PortMap {
     mocap_in_port: u16,
     audio_in_port: u16,
     client_event_port: u16,
-    backing_track_port: u16
+    backing_track_port: u16,
+    server_event_in_port: u16,
 }
 
 impl PortMap {
     pub fn new(new_connections_port: u16) -> Self {
-        eprintln!("Portmap uses base ports!");
+        warn!("Portmap uses base ports!");
         Self {
             new_connections_port,
             mocap_in_port: 5653,
             audio_in_port: 5654,
             client_event_port: 5655,
-            backing_track_port: 5656
+            backing_track_port: 5656,
+            server_event_in_port: 5657,
         }
     }
 }
@@ -62,10 +79,14 @@ impl PortMap {
 /// This data should more or less be constant, or at least thread safe.
 #[derive(Clone, Debug)]
 pub struct ServerThreadData {
+    /// The host of the server.
     host: String,
+    /// The ports available on the server.
     ports: PortMap,
+    /// The channel that should be cloned by everyone looking to send something to the
     synchronizer_to_out_tx: Sender<VRTPPacket>,
     client_events_in_tx: Sender<ClientMessage>,
+    /// The current minimum user ID.
     cur_user_id: Arc<Mutex<UserIDType>>,
     extra_ports: Arc<HashMap<String, u16>>,
 }
@@ -76,6 +97,7 @@ pub struct Server {
     pub port_map: PortMap,
     // maybe a map connecting their join-handles
     pub clients: Arc<RwLock<HashMap<UserIDType, ServerUserData>>>,
+    clients_by_ip: Arc<RwLock<HashMap<String, ServerUserData>>>,
     // pub performers: Arc<RwLock<Vec<ServerUserData>>>,
     // pub audience: Arc<RwLock<Vec<ServerUserData>>>,
     pub cur_user_id: Arc<Mutex<UserIDType>>,
@@ -108,6 +130,7 @@ impl Server {
             host,
             port_map,
             clients: Arc::new(RwLock::new(HashMap::new())),
+            clients_by_ip: Arc::new(RwLock::new(HashMap::new())),
             synchronizer_to_out_tx: sync_out_tx,
             synchronizer_to_out_rx: sync_out_rx,
             client_event_in_rx: client_in_rx,
@@ -123,15 +146,27 @@ impl Server {
         let addr = format!("{0}:{1}", self.host, self.port_map.new_connections_port);
         let listener = TcpListener::bind(&addr).await?;
 
-        println!("Listening on {addr}");
+        info!("Listening for new connections on {addr}");
+
+        // block for scope purposes
+        // spin up the client event listener
+        {
+            let port = self.port_map.client_event_port;
+            let host = self.host.clone();
+            let host_map = Arc::clone(&self.clients_by_ip);
+            let _ = tokio::spawn(async move {
+                Self::client_event_connection_listener(port, host, host_map).await
+            });
+        }
 
         loop {
             let (socket, incoming_addr) = listener.accept().await?;
 
             let thread_data = self.create_thread_data();
             let hm_clone = Arc::clone(&self.clients);
+            let clients_by_ip_clone = Arc::clone(&self.clients_by_ip);
 
-            println!("Got a new connection from {incoming_addr}");
+            info!("Got a new connection from {incoming_addr}");
 
             // perform the handshake synchronously, so we don't have to worry about crossing streams?
             // TODO add the ability for multiple streams at once
@@ -139,15 +174,25 @@ impl Server {
             tokio::spawn(async move {
                 let res = Self::perform_handshake(socket, incoming_addr, thread_data).await;
 
-
-
                 if let Err(msg) = res {
-                    eprintln!("Attempted handshake with {0} failed: {msg}", incoming_addr);
+                    error!("Attempted handshake with {0} failed: {msg}", incoming_addr);
                     return
                 }
+
                 let (user_id, server_data) = res.unwrap();
+
+
+                {
+                    // sample messages!
+                    server_data.server_event_update_send.send(ServerMessage::Performer(PerformerServerMessage::Ready(true))).await;
+                }
+
                 let mut write_handle = hm_clone.write().await;
-                write_handle.insert(user_id, server_data);
+                write_handle.insert(user_id, server_data.clone());
+
+                let mut write_handle = clients_by_ip_clone.write().await;
+                write_handle.insert(server_data.base_user_data.remote_ip_addr.to_string(), server_data);
+
 
 
             });
@@ -186,12 +231,10 @@ impl Server {
 
         let str_bytes = &handshake_buf[0..bytes].to_ascii_lowercase();
         let str = String::from_utf8_lossy(&str_bytes);
-        println!("Synack received: {0}", match str {
+        debug!("Synack received: {0}", match str {
             Cow::Borrowed(st) => st.to_owned(),
             Cow::Owned(st) => st
         });
-
-
 
         let synack: HandshakeSynAck = match serde_json::from_slice(&handshake_buf[0..bytes]) {
             Ok(synack_js) => synack_js,
@@ -228,9 +271,9 @@ impl Server {
             Some(synack.extra_ports),
         );
 
-        let (backing_track_send, backing_track_recv) = oneshot::channel::<BackingTrackData>();
+        let (backing_track_send, backing_track_recv) = mpsc::channel::<BackingTrackData>(MAX_CHAN_SIZE);
         let (server_event_out_send, server_event_out_recv) = mpsc::channel::<ServerMessage>(MAX_CHAN_SIZE);
-
+        let (client_event_socket_out, client_event_socket_in) = mpsc::channel::<TcpStream>(MAX_CHAN_SIZE);
 
 
         // let ServerUserData
@@ -242,7 +285,8 @@ impl Server {
             },
             base_user_data: user_data,
             backing_track_update_send: backing_track_send,
-            server_event_update_send: server_event_out_send
+            server_event_update_send: server_event_out_send,
+            client_event_socket_send: client_event_socket_out
         };
 
         // return server_user_data
@@ -251,6 +295,7 @@ impl Server {
             server_event_out_recv,
             server_thread_data.client_events_in_tx.clone(),
             backing_track_recv,
+            client_event_socket_in
         );
         client_channel_data.synchronizer_vrtp_out = Some(server_thread_data.synchronizer_to_out_tx.clone());
 
@@ -266,15 +311,15 @@ impl Server {
         };
 
         // pass off the client to handle themselves
-        tokio::spawn(async move {
-            client.start_main_channels()
+        let _ = tokio::spawn(async move {
+            client.start_main_channels().await
         });
 
         // from here on out, it's up to the client to fill things out.
 
 
 
-        println!(
+        info!(
             "New user {0} ({1}, id #{2}) has authenticated as {3}",
             &server_user_data.base_user_data.fancy_title,
             &server_user_data.base_user_data.remote_ip_addr,
@@ -285,6 +330,32 @@ impl Server {
             }
         );
         Ok((our_user_id, server_user_data))
+
+    }
+
+    /// Listen for client events, and forward any received to the appropriate client.
+    async fn client_event_connection_listener(event_port: u16, host: String, users_by_ip: Arc<RwLock<HashMap<String, ServerUserData>>>) -> io::Result<()> {
+        let addr = format!("{0}:{1}", host, event_port);
+        let listener = TcpListener::bind(&addr).await?;
+
+        info!("Listening for client events on {addr}");
+
+        loop {
+            let (socket, incoming_addr) = listener.accept().await?;
+            let found_user_lock = users_by_ip.read().await;
+            let found_user = found_user_lock.get(&incoming_addr.ip().to_string());
+            // dbg!(&found_user_lock);
+            if found_user.is_none() {
+                warn!("Received a client event connection request from {0}, but they have not initiated a handshake!", &incoming_addr.to_string());
+                continue;
+            }
+            else {
+                info!("Client event channel connection established for {0}", &incoming_addr);
+            }
+            let found_user = found_user.unwrap();
+            // found_user.base_user_data.await;
+            let _ = found_user.client_event_socket_send.send(socket).await;
+        }
 
     }
 

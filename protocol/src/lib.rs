@@ -11,7 +11,7 @@ pub mod handshake;
 pub type UserIDType = u16;
 
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone)]
 pub enum UserType {
     Audience,
     Performer
