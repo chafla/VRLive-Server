@@ -27,7 +27,7 @@ impl OSCEncodable for ServerMessage {
         }.to_owned()
     }
 
-    fn to_message(&self, mut existing_prefix: Vec<String>) -> rosc::OscMessage {
+    fn to_message(&self, mut existing_prefix: Vec<String>) -> OscMessage {
         existing_prefix.push(Self::base_prefix());
         match self {
             Self::Scene(msg) => msg.to_message(existing_prefix),
@@ -91,12 +91,12 @@ impl OSCEncodable for SceneMessage {
         }.to_owned()
     }
 
-    fn to_message(&self, mut existing_prefix: Vec<String>) -> rosc::OscMessage {
+    fn to_message(&self, mut existing_prefix: Vec<String>) -> OscMessage {
         existing_prefix.push(Self::base_prefix());
         existing_prefix.push(self.variant_prefix());
         let pfx = existing_prefix.join("/");
         match self {
-            Self::State(state_num) => rosc::OscMessage { addr: pfx, args: vec![OscType::Int(*state_num)] }
+            Self::State(state_num) => OscMessage { addr: pfx, args: vec![OscType::Int(*state_num)] }
         }
     }
 }
@@ -140,14 +140,14 @@ impl OSCEncodable for BackingMessage {
         }.to_owned()
     }
 
-    fn to_message(&self, mut existing_prefix: Vec<String>) -> rosc::OscMessage {
+    fn to_message(&self, mut existing_prefix: Vec<String>) -> OscMessage {
         existing_prefix.push(Self::base_prefix());
         existing_prefix.push(self.variant_prefix());
         let pfx = existing_prefix.join("/");
         match self {
-            Self::Start(ts) => rosc::OscMessage { addr: pfx, args: vec![OscType::Float(*ts)] },
-            Self::Stop => rosc::OscMessage {addr: pfx, args: vec![]},
-            Self::New(new_song) => rosc::OscMessage {addr: pfx, args: vec![OscType::String(new_song.clone())]}
+            Self::Start(ts) => OscMessage { addr: pfx, args: vec![OscType::Float(*ts)] },
+            Self::Stop => OscMessage {addr: pfx, args: vec![]},
+            Self::New(new_song) => OscMessage {addr: pfx, args: vec![OscType::String(new_song.clone())]}
         }
     }
 }
@@ -204,13 +204,13 @@ impl OSCEncodable for PerformerServerMessage {
         }.to_owned()
     }
 
-    fn to_message(&self, mut addr: Vec<String>) -> rosc::OscMessage {
+    fn to_message(&self, mut addr: Vec<String>) -> OscMessage {
         addr.push(Self::base_prefix());
         addr.push(self.variant_prefix());
         let pfx = addr.join("/");
 
         match self {
-            Self::Ready(b) => rosc::OscMessage {
+            Self::Ready(b) => OscMessage {
                 addr: pfx,
                 args: vec![OscType::Bool(*b)]
             },
@@ -258,12 +258,12 @@ impl OSCEncodable for MatchMakeMessage {
         }.to_owned()
     }
 
-    fn to_message(&self, mut existing_prefix: Vec<String>) -> rosc::OscMessage {
+    fn to_message(&self, mut existing_prefix: Vec<String>) -> OscMessage {
         existing_prefix.push(Self::base_prefix());
         let pfx = existing_prefix.join("/");
 
         match self {
-            Self::Request => rosc::OscMessage {addr: pfx + "/request", args: vec![]}
+            Self::Request => OscMessage {addr: pfx + "/request", args: vec![]}
         }
     }
 }

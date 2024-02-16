@@ -74,7 +74,7 @@ pub struct Server {
     pub host: String,
     /// Port responsible for handling new incoming connections (TCP).
     pub port_map: PortMap,
-    // maybe a map connecting their joinhandles
+    // maybe a map connecting their join-handles
     pub clients: Arc<RwLock<HashMap<UserIDType, ServerUserData>>>,
     // pub performers: Arc<RwLock<Vec<ServerUserData>>>,
     // pub audience: Arc<RwLock<Vec<ServerUserData>>>,
@@ -228,7 +228,7 @@ impl Server {
             Some(synack.extra_ports),
         );
 
-        let (backing_track_send, backing_track_recv) = tokio::sync::oneshot::channel::<BackingTrackData>();
+        let (backing_track_send, backing_track_recv) = oneshot::channel::<BackingTrackData>();
         let (server_event_out_send, server_event_out_recv) = mpsc::channel::<ServerMessage>(MAX_CHAN_SIZE);
 
 

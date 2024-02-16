@@ -26,7 +26,7 @@ impl OSCEncodable for ClientMessage {
     }
 
 
-    fn to_message(&self, addr: Vec<String>) -> rosc::OscMessage {
+    fn to_message(&self, addr: Vec<String>) -> OscMessage {
         match self {
             Self::Performer(pcm) => pcm.to_message(addr),
             Self::Audience => todo!(),
@@ -81,7 +81,7 @@ impl OSCEncodable for PerformerToggle {
             Self::Audio(b) | Self::Actor(b) | Self::Motion(b) => *b
         };
 
-        return rosc::OscMessage {
+        return OscMessage {
             addr: existing_prefix.join("/"),
             args: vec![OscType::Bool(val)]
         }
