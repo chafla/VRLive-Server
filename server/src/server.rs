@@ -11,13 +11,13 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc::{self, Receiver, Sender}, Mutex, oneshot, RwLock};
 
-use protocol::{osc_messages_out::ServerMessage, UserData, UserIDType, vrl_packet::VRLOSCPacket};
+use protocol::{osc_messages_out::ServerMessage, UserData, UserIDType};
 use protocol::handshake::{HandshakeAck, HandshakeCompletion, HandshakeSynAck};
 use protocol::osc_messages_in::ClientMessage;
 use protocol::UserType::{Audience, Performer};
 
-use crate::{BackingTrackData, MAX_CHAN_SIZE, RemoteUserType, VRTPPacket};
-use crate::client::ClientChannelData;
+use crate::{BackingTrackData, MAX_CHAN_SIZE, VRTPPacket};
+use crate::client::{AudienceMember, ClientChannelData, ClientPorts, VRLClient};
 
 const HANDSHAKE_BUF_SIZE: usize = 2048;
 
@@ -139,6 +139,8 @@ impl Server {
             tokio::spawn(async move {
                 let res = Self::perform_handshake(socket, incoming_addr, thread_data).await;
 
+
+
                 if let Err(msg) = res {
                     eprintln!("Attempted handshake with {0} failed: {msg}", incoming_addr);
                     return
@@ -196,8 +198,6 @@ impl Server {
             Err(e) => return Err(format!("Synack response appears malformed: {e}").to_owned())
         };
 
-        handshake_buf = [0; HANDSHAKE_BUF_SIZE];
-
         // perform some sanity checks
         if synack.user_id != our_user_id {
             return Err("Synack returned a user ID that did not match the one we started the handshake with".to_owned());
@@ -218,10 +218,15 @@ impl Server {
 
         let user_data = UserData {
             participant_id: our_user_id,
-            remote_port: addr.port(),
             remote_ip_addr: addr.ip(),
             fancy_title: synack.own_identifier
         };
+
+        let ports = ClientPorts::new(
+            synack.server_event_port,
+            synack.backing_track_port,
+            Some(synack.extra_ports),
+        );
 
         let (backing_track_send, backing_track_recv) = tokio::sync::oneshot::channel::<BackingTrackData>();
         let (server_event_out_send, server_event_out_recv) = mpsc::channel::<ServerMessage>(MAX_CHAN_SIZE);
@@ -248,6 +253,22 @@ impl Server {
             backing_track_recv,
         );
         client_channel_data.synchronizer_vrtp_out = Some(server_thread_data.synchronizer_to_out_tx.clone());
+
+        let client = match server_user_data.user_type {
+            Audience => {
+                AudienceMember::new(
+                    server_user_data.base_user_data.clone(),
+                    client_channel_data,
+                    ports,
+                )
+            },
+            Performer => todo!()
+        };
+
+        // pass off the client to handle themselves
+        tokio::spawn(async move {
+            client.start_main_channels()
+        });
 
         // from here on out, it's up to the client to fill things out.
 
@@ -280,73 +301,4 @@ impl Server {
 
         }
     }
-
-    /// Main connection manager.
-    /// Receive a new connection, calling initialize_new_user() when needed.
-    // pub fn create_incoming_connection() -> Box<dyn VRLClient> {
-    //
-    // }
-
-
-    /// Create a new user, spinning up all the necessary threads as needed.
-    pub fn initialize_new_user(user: RemoteUserType, data: UserData) {
-
-        // build up the channels that will be common between both
-
-        // mocap osc in
-        // events in
-        // events out
-        // audio stream
-
-        // mocap osc in -- UDP routed
-        // useful for audience and performers, though only performers will have a high-priority one
-        let (mocapInSend, mocapInRecv) = mpsc::channel::<VRLOSCPacket>(MAX_CHAN_SIZE);
-
-        // audience mocap out -- UDP routed
-        // Everyone gets this, it comes free with your xbox
-        let (audienceMocapOutSend, audienceMocapOutRecv) = mpsc::channel::<VRLOSCPacket>(MAX_CHAN_SIZE);
-
-        // osc server events out -- TCP routed
-        let (serverEventOutSend, serverEventOutRecv) = mpsc::channel::<ServerMessage>(MAX_CHAN_SIZE);
-
-        // backing track out -- TCP routed
-        let (backingTrackSend, backingTrackRecv) = oneshot::channel::<BackingTrackData>();
-
-        // // This is the data that the server needs to hold onto for every user.
-        // let user_data = ServerUserData {
-        //     base_user_data: data,
-        //     // server needs to update these channels to provide base user data.
-        //     backing_track_update_send: backingTrackSend,
-        //     server_event_update_send: serverEventOutSend
-        // };
-
-        // spin off channels here?
-        // or do it elsewhere?
-
-        // other channels are either unique to the client type OR handled by the server
-
-
-
-
-
-        match user {
-            RemoteUserType::Audience => {
-                // Channels handling the receipt of mocap data
-                let (audienceMocapInSend, audienceMocapInRecv) = mpsc::channel::<VRLOSCPacket>(MAX_CHAN_SIZE);
-
-
-            },
-            RemoteUserType::Server => {
-                // TODO spawn the audio stream here
-            }
-
-        }
-
-
-
-    }
-
-
-
-
 }

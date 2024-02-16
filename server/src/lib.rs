@@ -12,13 +12,3 @@ const MAX_CHAN_SIZE: usize = 2 << 12;
 
 type AudioPacket = ();  // TODO
 type VRTPPacket = ();
-
-
-
-
-
-
-enum RemoteUserType {
-    Audience,
-    Server,
-}

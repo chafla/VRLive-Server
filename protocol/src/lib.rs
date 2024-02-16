@@ -46,7 +46,6 @@ pub struct AudienceChannels {
 pub struct UserData {
     pub participant_id: UserIDType, // you better not have this many people
     pub fancy_title: String,
-    pub remote_port: u16,
     pub remote_ip_addr: IpAddr,
 }
 
@@ -61,6 +60,11 @@ pub trait OSCEncodable {
 
     /// Create a message from a variant of this value.
     fn to_message(&self, existing_prefix: Vec<String>) -> OscMessage;
+
+    /// Convert a server message to an OSC message.
+    fn encode(&self) -> OscMessage {
+        self.to_message(vec![])
+    }
 }
 
 /// A message with this trait can, similarly, be easily decoded from OSC.
