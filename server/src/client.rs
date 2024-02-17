@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use log::{debug, warn};
+use log::{debug, error, info, warn};
 use rosc::{encoder, OscPacket};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -11,8 +11,9 @@ use protocol::{OSCDecodable, OSCEncodable, UserData};
 use protocol::osc_messages_in::ClientMessage;
 use protocol::osc_messages_out::ServerMessage;
 use protocol::vrl_packet::VRLOSCPacket;
+use protocol::backing_track::BackingTrackData;
 
-use crate::{AudioPacket, BackingTrackData, VRTPPacket};
+use crate::{AudioPacket, VRTPPacket};
 
 pub struct AudienceMember {
     pub user_data: UserData,
@@ -22,7 +23,7 @@ pub struct AudienceMember {
 
 impl AudienceMember {
 
-    pub fn get_title<'a>(&'a self) -> &'a str {
+    pub fn get_title(&self) -> &str {
         &self.user_data.fancy_title
     }
     pub fn new(user_data: UserData, base_channels: ClientChannelData, ports: ClientPorts) -> Self {
@@ -63,7 +64,7 @@ impl VRLClient for AudienceMember {
 
     /// Task responsible for sending out server events.
     async fn server_event_sender(mut event_sock: Receiver<TcpStream>, mut sender_in: Receiver<ServerMessage>, server_event_port: u16, user_data: UserData) {
-        loop {
+        'outer: loop {
             let client_stream = event_sock.recv().await;
             if client_stream.is_none() {
                 debug!("Server event listener shutting down.");
@@ -81,7 +82,7 @@ impl VRLClient for AudienceMember {
                 // our server has been killed!
                 if let None = res {
                     // debug!("Server event listener for {0} has been destroyed.", &user_data.fancy_title);
-                    return;
+                    break 'outer;
                 }
 
                 let msg = res.unwrap().encode();
@@ -108,6 +109,8 @@ impl VRLClient for AudienceMember {
             }
 
         }
+
+        debug!("Shutting down server event sender");
     }
 
     /// Task responsible for listening for incoming client events.
@@ -176,8 +179,34 @@ impl VRLClient for AudienceMember {
 
     /// Task responsible for monitoring the server's backing track channel, and
     /// dispatching a new background track when it becomes available.
-    async fn backing_track_sender(&self) {
-        todo!()
+    async fn backing_track_sender(&self, mut sock_channel: Receiver<TcpStream>, mut backing_track_stream: Receiver<BackingTrackData>) {
+        'outer: loop {
+            let client_stream = sock_channel.recv().await;
+            if client_stream.is_none() {
+                debug!("Client event listener shutting down.");
+                break;
+            }
+            else {
+                debug!("Client event listener is up and ready")
+            }
+            let mut client_stream = client_stream.unwrap();
+
+            loop {
+                // block and wait
+                let incoming_backing_track_msg = match backing_track_stream.recv().await {
+                    Some(msg) => msg,
+                    None => break 'outer
+                };
+
+                // todo find a good and clever way to write the filename out
+                if let Err(e) = client_stream.write(incoming_backing_track_msg.get_data()).await {
+                    error!("Failed to write backing track out to a client: {e}");
+                    continue;
+                }
+            }
+        }
+
+        debug!("Backing track task shutting down.")
     }
 }
 
@@ -268,7 +297,7 @@ pub trait VRLClient {
     async fn client_event_listener(client_events_out: Sender<ClientMessage>, client_socket: Receiver<TcpStream>);
 
     /// Thread responsible for updating the backing track as needed.
-    async fn backing_track_sender(&self);
+    async fn backing_track_sender(&self, sock_channel: Receiver<TcpStream>, backing_track_stream: Receiver<BackingTrackData>);
 }
 
 pub struct AudienceConnection {

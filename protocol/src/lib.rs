@@ -7,6 +7,7 @@ pub mod osc_messages_in;
 pub mod vrl_packet;
 pub mod osc_messages_out;
 pub mod handshake;
+pub mod backing_track;
 
 pub type UserIDType = u16;
 

@@ -18,7 +18,9 @@ use protocol::osc_messages_in::ClientMessage;
 use protocol::osc_messages_out::PerformerServerMessage;
 use protocol::UserType::{Audience, Performer};
 
-use crate::{BackingTrackData, MAX_CHAN_SIZE, VRTPPacket};
+use protocol::backing_track::BackingTrackData;
+
+use crate::{MAX_CHAN_SIZE, VRTPPacket};
 use crate::client::{AudienceMember, ClientChannelData, ClientPorts, VRLClient};
 
 const HANDSHAKE_BUF_SIZE: usize = 2048;
@@ -151,92 +153,114 @@ impl Server {
         }
     }
 
+
+    pub async fn main_server_loop(&mut self) {
+
+        loop {
+            // TODO
+        }
+
+    }
+
     /// Start up the host server's connection receiving thread.
     pub async fn start(&mut self) -> io::Result<()> {
+
+
+        self.start_client_listeners().await;
+        // if this fails we're giving up
+        self.new_connection_listener().await.unwrap();
+
+        self.main_server_loop().await;
+
+        Ok(())
+
+    }
+
+    async fn start_listener(&self, fancy_title: &'static str, port: u16, channel_getter: fn(&ServerUserData) -> Sender<TcpStream>) {
+        let host = self.host.clone();
+        let host_map = Arc::clone(&self.clients_by_ip);
+        let _ = tokio::spawn(async move {
+            Self::client_connection_listener(port, host, host_map, channel_getter, &fancy_title.to_owned()).await
+        });
+    }
+
+    async fn start_client_listeners(&self) {
+        self.start_listener(
+            "client event",
+            self.port_map.client_event_port,
+            | user_data: &ServerUserData | user_data.client_event_socket_send.clone(),
+        ).await;
+
+        self.start_listener(
+            "backing track",
+            self.port_map.backing_track_port,
+            | user_data: &ServerUserData | user_data.backing_track_socket_send.clone(),
+        ).await;
+
+        self.start_listener(
+            "server event in",
+            self.port_map.server_event_in_port,
+            | user_data: &ServerUserData | user_data.server_event_socket_send.clone(),
+        ).await;
+
+
+    }
+
+    async fn new_connection_listener(&self) -> io::Result<()> {
         let addr = format!("{0}:{1}", self.host, self.port_map.new_connections_port);
         let listener = TcpListener::bind(&addr).await?;
 
+        let clients = Arc::clone(&self.clients);
+        let clients_by_ip = Arc::clone(&self.clients_by_ip);
         info!("Listening for new connections on {addr}");
+        let thread_data = self.create_thread_data();
 
-        // block for scope purposes
-        // spin up the client event listener
-        {
-            let port = self.port_map.client_event_port;
-            let channel_getter = | user_data: &ServerUserData | user_data.client_event_socket_send.clone();
-            let host = self.host.clone();
-            let host_map = Arc::clone(&self.clients_by_ip);
-            let _ = tokio::spawn(async move {
-                Self::client_connection_listener(port, host, host_map, channel_getter, "client event").await
-            });
-        }
+        tokio::spawn(async move {
+            loop {
+                let (socket, incoming_addr) = match listener.accept().await {
+                    Ok(p) => p,
+                    Err(e) => {
+                        error!("Failed when accepting a listener: {e}");
+                        continue;
+                    }
+                };
 
-        // backing track listener
+                // todo this should probably come out of create_server_data, find a good way to replicate that
+                let thread_data = thread_data.clone();
+                let clients_local = Arc::clone(&clients);
+                let clients_by_ip_local = Arc::clone(&clients_by_ip);
 
-        {
-            let port = self.port_map.backing_track_port;
-            let channel_getter = | user_data: &ServerUserData | user_data.backing_track_socket_send.clone();
-            let host = self.host.clone();
-            let host_map = Arc::clone(&self.clients_by_ip);
-            let _ = tokio::spawn(async move {
-                Self::client_connection_listener(port, host, host_map, channel_getter, "backing track").await
-            });
+                info!("Got a new connection from {incoming_addr}");
 
-        }
+                // perform the handshake synchronously, so we don't have to worry about crossing streams?
+                // TODO add the ability for multiple streams at once
 
+                tokio::spawn(async move {
+                    let res = Self::perform_handshake(socket, incoming_addr, thread_data).await;
 
-        {
-            let port = self.port_map.server_event_in_port;
-            let channel_getter = | user_data: &ServerUserData | user_data.server_event_socket_send.clone();
-            let host = self.host.clone();
-            let host_map = Arc::clone(&self.clients_by_ip);
-            let _ = tokio::spawn(async move {
-                Self::client_connection_listener(port, host, host_map, channel_getter, "server event").await
-            });
+                    if let Err(msg) = res {
+                        error!("Attempted handshake with {0} failed: {msg}", incoming_addr);
+                        return
+                    }
 
-        }
-
-        loop {
-            let (socket, incoming_addr) = listener.accept().await?;
-
-            let thread_data = self.create_thread_data();
-            let hm_clone = Arc::clone(&self.clients);
-            let clients_by_ip_clone = Arc::clone(&self.clients_by_ip);
-
-            info!("Got a new connection from {incoming_addr}");
-
-            // perform the handshake synchronously, so we don't have to worry about crossing streams?
-            // TODO add the ability for multiple streams at once
-
-            tokio::spawn(async move {
-                let res = Self::perform_handshake(socket, incoming_addr, thread_data).await;
-
-                if let Err(msg) = res {
-                    error!("Attempted handshake with {0} failed: {msg}", incoming_addr);
-                    return
-                }
-
-                let (user_id, server_data) = res.unwrap();
+                    let (user_id, server_data) = res.unwrap();
 
 
-                {
-                    // sample messages!
-                    server_data.server_event_update_send.send(ServerMessage::Performer(PerformerServerMessage::Ready(true))).await;
-                }
+                    {
+                        // sample messages!
+                        let _ = server_data.server_event_update_send.send(ServerMessage::Performer(PerformerServerMessage::Ready(true))).await;
+                    }
 
-                let mut write_handle = hm_clone.write().await;
-                write_handle.insert(user_id, server_data.clone());
+                    let mut write_handle = clients_local.write().await;
+                    write_handle.insert(user_id, server_data.clone());
 
-                let mut write_handle = clients_by_ip_clone.write().await;
-                write_handle.insert(server_data.base_user_data.remote_ip_addr.to_string(), server_data);
+                    let mut write_handle = clients_by_ip_local.write().await;
+                    write_handle.insert(server_data.base_user_data.remote_ip_addr.to_string(), server_data);
+                });
+            }
+        });
 
-
-
-            });
-
-
-
-        }
-
+        Ok(())
     }
 
 
