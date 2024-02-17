@@ -1,17 +1,16 @@
 // use std::sync::mpsc::Receiver;
 
 use std::borrow::Cow;
-use std::char::MAX;
 use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use log::{debug, error, info, warn};
 
+use log::{debug, error, info, warn};
 // use serde_json::Result;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpSocket, TcpStream};
-use tokio::sync::{mpsc::{self, Receiver, Sender}, Mutex, oneshot, RwLock};
+use tokio::sync::{mpsc::{self, Receiver, Sender}, Mutex, RwLock};
 
 use protocol::{osc_messages_out::ServerMessage, UserData, UserIDType};
 use protocol::handshake::{HandshakeAck, HandshakeCompletion, HandshakeSynAck};
@@ -45,8 +44,19 @@ pub struct ServerUserData {
     backing_track_update_send: Sender<BackingTrackData>,
     /// Send on this channel to update thread with new server events.
     server_event_update_send: Sender<ServerMessage>,
+
+    // tcp channels
+    // these should theoretically be oneshot channels,
+    // but those are annoying to clone
+
+    // TODO move these out to their own data structure
+
     /// Send a connected socket on this channel when a new client event channel is established.
     client_event_socket_send: Sender<TcpStream>,
+    /// Send a connected socket on this channel when a new backing track connection is established
+    backing_track_socket_send: Sender<TcpStream>,
+    /// Send a connected socket on this channel when a new server event channel is established.
+    server_event_socket_send: Sender<TcpStream>,
 }
 
 // TODO lay this out!
@@ -152,11 +162,37 @@ impl Server {
         // spin up the client event listener
         {
             let port = self.port_map.client_event_port;
+            let channel_getter = | user_data: &ServerUserData | user_data.client_event_socket_send.clone();
             let host = self.host.clone();
             let host_map = Arc::clone(&self.clients_by_ip);
             let _ = tokio::spawn(async move {
-                Self::client_event_connection_listener(port, host, host_map).await
+                Self::client_connection_listener(port, host, host_map, channel_getter, "client event").await
             });
+        }
+
+        // backing track listener
+
+        {
+            let port = self.port_map.backing_track_port;
+            let channel_getter = | user_data: &ServerUserData | user_data.backing_track_socket_send.clone();
+            let host = self.host.clone();
+            let host_map = Arc::clone(&self.clients_by_ip);
+            let _ = tokio::spawn(async move {
+                Self::client_connection_listener(port, host, host_map, channel_getter, "backing track").await
+            });
+
+        }
+
+
+        {
+            let port = self.port_map.server_event_in_port;
+            let channel_getter = | user_data: &ServerUserData | user_data.server_event_socket_send.clone();
+            let host = self.host.clone();
+            let host_map = Arc::clone(&self.clients_by_ip);
+            let _ = tokio::spawn(async move {
+                Self::client_connection_listener(port, host, host_map, channel_getter, "server event").await
+            });
+
         }
 
         loop {
@@ -273,8 +309,10 @@ impl Server {
 
         let (backing_track_send, backing_track_recv) = mpsc::channel::<BackingTrackData>(MAX_CHAN_SIZE);
         let (server_event_out_send, server_event_out_recv) = mpsc::channel::<ServerMessage>(MAX_CHAN_SIZE);
-        let (client_event_socket_out, client_event_socket_in) = mpsc::channel::<TcpStream>(MAX_CHAN_SIZE);
 
+        let (client_event_socket_out, client_event_socket_in) = mpsc::channel::<TcpStream>(MAX_CHAN_SIZE);
+        let (backing_track_socket_tx, backing_track_socket_rx) = mpsc::channel::<TcpStream>(MAX_CHAN_SIZE);
+        let (server_event_socket_out, server_event_socket_in) = mpsc::channel::<TcpStream>(MAX_CHAN_SIZE);
 
         // let ServerUserData
         let server_user_data = ServerUserData {
@@ -286,7 +324,9 @@ impl Server {
             base_user_data: user_data,
             backing_track_update_send: backing_track_send,
             server_event_update_send: server_event_out_send,
-            client_event_socket_send: client_event_socket_out
+            client_event_socket_send: client_event_socket_out,
+            backing_track_socket_send: backing_track_socket_tx,
+            server_event_socket_send: server_event_socket_out
         };
 
         // return server_user_data
@@ -295,7 +335,9 @@ impl Server {
             server_event_out_recv,
             server_thread_data.client_events_in_tx.clone(),
             backing_track_recv,
-            client_event_socket_in
+            client_event_socket_in,
+            backing_track_socket_rx,
+            server_event_socket_in,
         );
         client_channel_data.synchronizer_vrtp_out = Some(server_thread_data.synchronizer_to_out_tx.clone());
 
@@ -333,28 +375,32 @@ impl Server {
 
     }
 
-    /// Listen for client events, and forward any received to the appropriate client.
-    async fn client_event_connection_listener(event_port: u16, host: String, users_by_ip: Arc<RwLock<HashMap<String, ServerUserData>>>) -> io::Result<()> {
-        let addr = format!("{0}:{1}", host, event_port);
+    /// Function for forwarding a TCP socket channel onto the client.
+    /// The client should have a corresponding channel that they will be listening on.
+    async fn client_connection_listener(
+        listening_port: u16, host: String, users_by_ip: Arc<RwLock<HashMap<String, ServerUserData>>>,
+        channel_getter: impl Fn(&ServerUserData) -> Sender<TcpStream>, listener_label: &str,
+
+    ) -> io::Result<()>
+    {
+        let addr = format!("{0}:{1}", host, listening_port);
         let listener = TcpListener::bind(&addr).await?;
 
-        info!("Listening for client events on {addr}");
+        info!("Listening for {listener_label} on {addr}");
 
         loop {
             let (socket, incoming_addr) = listener.accept().await?;
             let found_user_lock = users_by_ip.read().await;
             let found_user = found_user_lock.get(&incoming_addr.ip().to_string());
-            // dbg!(&found_user_lock);
             if found_user.is_none() {
-                warn!("Received a client event connection request from {0}, but they have not initiated a handshake!", &incoming_addr.to_string());
+                warn!("Received a {listener_label} connection request from {0}, but they have not initiated a handshake!", &incoming_addr.to_string());
                 continue;
             }
             else {
-                info!("Client event channel connection established for {0}", &incoming_addr);
+                info!("{listener_label} connection established for {0}", &incoming_addr);
             }
             let found_user = found_user.unwrap();
-            // found_user.base_user_data.await;
-            let _ = found_user.client_event_socket_send.send(socket).await;
+            let _ = channel_getter(found_user).send(socket).await;
         }
 
     }

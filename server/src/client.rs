@@ -1,12 +1,10 @@
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
 
 use log::{debug, warn};
 use rosc::{encoder, OscPacket};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpSocket, TcpStream};
-use tokio::select;
+use tokio::net::TcpStream;
 use tokio::sync::mpsc::{Receiver, Sender};
 
 use protocol::{OSCDecodable, OSCEncodable, UserData};
@@ -38,21 +36,19 @@ impl AudienceMember {
 
 impl VRLClient for AudienceMember {
     async fn start_main_channels(mut self) {
-
-        let server_event_sender = self.base_channels.server_events_out.take();
-
-        if server_event_sender.is_none() {
-            panic!("Server event sender was yoinked before it was needed.")
-        }
-
         // server events
         {
+            let server_event_sender = self.base_channels.server_events_out.take();
 
+            if server_event_sender.is_none() {
+                panic!("Server event sender was yoinked before it was needed.")
+            }
+            let server_sock_chan = self.base_channels.server_event_socket_chan;
             let server_port = self.ports.server_event_port;
             let user_data = self.user_data.clone();
 
             tokio::spawn(async move {
-                Self::server_event_sender(server_event_sender.unwrap(), server_port, user_data).await
+                Self::server_event_sender(server_sock_chan, server_event_sender.unwrap(), server_port, user_data).await
             });
         }
 
@@ -66,55 +62,56 @@ impl VRLClient for AudienceMember {
     }
 
     /// Task responsible for sending out server events.
-    async fn server_event_sender(mut sender_in: Receiver<ServerMessage>, server_event_port: u16, user_data: UserData) {
-        debug!("Attempting to connect to server event channel on {0}", &user_data.fancy_title);
-        let sock = TcpSocket::new_v4().unwrap();
-        let target_addr = SocketAddr::new(user_data.remote_ip_addr, server_event_port);
-        let mut stream = match sock.connect(target_addr).await {
-            Ok(stream) => stream,
-            Err(e) => {
-                warn!("Failed to connect to remote host: {e}");
-                return;
-            }
-        };
-
-        debug!("Spinning up server event handler for {0}", &user_data.fancy_title);
-
+    async fn server_event_sender(mut event_sock: Receiver<TcpStream>, mut sender_in: Receiver<ServerMessage>, server_event_port: u16, user_data: UserData) {
         loop {
-            let res = sender_in.recv().await;
-
-            // our server has been killed!
-            if let None = res {
-                debug!("Sender for {0} has been destroyed.", &user_data.fancy_title);
-                return;
+            let client_stream = event_sock.recv().await;
+            if client_stream.is_none() {
+                debug!("Server event listener shutting down.");
+                break;
             }
-
-            let msg = res.unwrap().encode();
-            let msg = OscPacket::Message(msg);
-
-            let packet = encoder::encode(&msg);
-
-            if let Err(e) = &packet {
-                warn!("Failed to encode osc message {0:?}: {e}", &msg);
-                continue;
+            else {
+                debug!("Server event listener is up and ready")
             }
+            let mut client_stream = client_stream.unwrap();
 
-            let packet = packet.unwrap();
+            loop {
 
-            let sent = stream.write(&packet).await;
+                let res = sender_in.recv().await;
 
-            match sent {
-                Ok(_) => {
-                    debug!("Sent a packet {0:?}", &packet);
-
+                // our server has been killed!
+                if let None = res {
+                    // debug!("Server event listener for {0} has been destroyed.", &user_data.fancy_title);
+                    return;
                 }
-                Err(e) => warn!("Failed to send packet: {e}")
+
+                let msg = res.unwrap().encode();
+                let msg = OscPacket::Message(msg);
+
+                let packet = encoder::encode(&msg);
+
+                if let Err(e) = &packet {
+                    warn!("Failed to encode osc message {0:?}: {e}", &msg);
+                    continue;
+                }
+
+                let packet = packet.unwrap();
+
+                let sent = client_stream.write(&packet).await;
+
+                match sent {
+                    Ok(_) => {
+                        debug!("Sent a packet {0:?}", &packet);
+
+                    }
+                    Err(e) => warn!("Failed to send packet: {e}")
+                }
             }
+
         }
     }
 
     /// Task responsible for listening for incoming client events.
-    async fn client_event_listener(mut client_events_out: Sender<ClientMessage>, mut client_socket: Receiver<TcpStream>) {
+    async fn client_event_listener(client_events_out: Sender<ClientMessage>, mut client_socket: Receiver<TcpStream>) {
 
         // loop: if we lose connection, we can just have the client give us a new handle.
         // unless that one's dead too.
@@ -199,6 +196,8 @@ pub struct ClientChannelData {
     pub client_events_in: Sender<ClientMessage>,
     /// Get our client event socket from the server
     pub client_event_socket_chan: Receiver<TcpStream>,
+    pub backing_track_socket_chan: Receiver<TcpStream>,
+    pub server_event_socket_chan: Receiver<TcpStream>,
 
     // channels dependent on the synchronizer, thus may exist depending on the type of client that we are
 
@@ -211,12 +210,18 @@ pub struct ClientChannelData {
 }
 
 impl ClientChannelData {
-    pub fn new(server_events_out: Receiver<ServerMessage>, client_events_in: Sender<ClientMessage>, backing_track_in: Receiver<BackingTrackData>, event_socket_chan: Receiver<TcpStream>) -> Self {
+    pub fn new(server_events_out: Receiver<ServerMessage>,
+               client_events_in: Sender<ClientMessage>, backing_track_in: Receiver<BackingTrackData>,
+               event_socket_chan: Receiver<TcpStream>, backing_track_socket_chan: Receiver<TcpStream>,
+        server_event_socket_chan: Receiver<TcpStream>,
+    ) -> Self {
         Self {
             server_events_out: Some(server_events_out),
             client_events_in,
             backing_track_in,
             client_event_socket_chan: event_socket_chan,
+            backing_track_socket_chan,
+            server_event_socket_chan,
             synchronizer_osc_in: None,
             synchronizer_audio_in: None,
             synchronizer_vrtp_out: None
@@ -256,7 +261,7 @@ pub trait VRLClient {
     async fn start_main_channels(self);
 
     /// Thread handling output for any server events.
-    async fn server_event_sender(sender_in: Receiver<ServerMessage>, server_event_port: u16, user_data: UserData);
+    async fn server_event_sender(event_sock: Receiver<TcpStream>, sender_in: Receiver<ServerMessage>, server_event_port: u16, user_data: UserData);
 
     /// Thread handling input for any client events.
     /// This will become the new "main" thread for the server keeping it alive.
