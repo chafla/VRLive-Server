@@ -3,14 +3,17 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io;
-use std::net::SocketAddr;
+use std::io::Write;
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::Arc;
 
 use log::{debug, error, info, warn};
+use rosc::{decoder, OscPacket, encoder};
 // use serde_json::Result;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpSocket, TcpStream};
+use tokio::net::{TcpListener, TcpSocket, TcpStream, UdpSocket};
 use tokio::sync::{mpsc::{self, Receiver, Sender}, Mutex, RwLock};
+use tokio::sync::mpsc::channel;
 
 use protocol::{osc_messages_out::ServerMessage, UserData, UserIDType};
 use protocol::handshake::{HandshakeAck, HandshakeCompletion, HandshakeSynAck};
@@ -24,6 +27,11 @@ use crate::{MAX_CHAN_SIZE, VRTPPacket};
 use crate::client::{AudienceMember, ClientChannelData, ClientPorts, VRLClient};
 
 const HANDSHAKE_BUF_SIZE: usize = 2048;
+const LISTENER_BUF_SIZE: usize = 2048;
+
+const AUDIENCE_BUFFER_CHAN_SIZE: usize = 2048;
+
+const MULTICAST_ADDR_STRING: &str = "226.226.226.226";
 
 
 /// Messages which can be sent over the client message socket.
@@ -65,11 +73,13 @@ pub struct ServerUserData {
 #[derive(Copy, Clone, Debug)]
 pub struct PortMap {
     new_connections_port: u16,
-    mocap_in_port: u16,
+    audience_mocap_in_port: u16,
+    performer_mocap_in_port: u16,
     audio_in_port: u16,
     client_event_port: u16,
     backing_track_port: u16,
     server_event_in_port: u16,
+    audience_mocap_out_port: u16
 }
 
 impl PortMap {
@@ -77,11 +87,13 @@ impl PortMap {
         warn!("Portmap uses base ports!");
         Self {
             new_connections_port,
-            mocap_in_port: 5653,
+            performer_mocap_in_port: 5653,
             audio_in_port: 5654,
             client_event_port: 5655,
             backing_track_port: 5656,
             server_event_in_port: 5657,
+            audience_mocap_in_port: 5658,
+            audience_mocap_out_port: 5659,
         }
     }
 }
@@ -104,28 +116,31 @@ pub struct ServerThreadData {
 }
 
 pub struct Server {
-    pub host: String,
-    /// Port responsible for handling new incoming connections (TCP).
-    pub port_map: PortMap,
-    // maybe a map connecting their join-handles
-    pub clients: Arc<RwLock<HashMap<UserIDType, ServerUserData>>>,
-    clients_by_ip: Arc<RwLock<HashMap<String, ServerUserData>>>,
-    // pub performers: Arc<RwLock<Vec<ServerUserData>>>,
-    // pub audience: Arc<RwLock<Vec<ServerUserData>>>,
-    pub cur_user_id: Arc<Mutex<UserIDType>>,
-
+    host: String,
+    /// Map storing the ports we will be using
+    port_map: PortMap,
+    /// Any additional ports that we might be requesting.
+    /// Stored separately from the port map so it can stay as copy
     extra_ports: Arc<HashMap<String, u16>>,
+    /// Clients
+    clients: Arc<RwLock<HashMap<UserIDType, ServerUserData>>>,
+    /// Separate association associating them by IP rather than their ID
+    clients_by_ip: Arc<RwLock<HashMap<String, ServerUserData>>>,
+    /// Our current lowest user ID, used as a canonical base for adding more.
+    cur_user_id: Arc<Mutex<UserIDType>>,
 
     // These channels are here because they need to be cloned by all new clients as common channels.
     /// Output channel coming from each synchronizer and going to the high-priority output thread.
-    pub synchronizer_to_out_tx: Sender<VRTPPacket>, // TODO add the type here
+    synchronizer_to_out_tx: Sender<VRTPPacket>, // TODO add the type here
     /// Hidden internal channel that receives the message inside the output thread
     synchronizer_to_out_rx: Receiver<VRTPPacket>,
 
     /// Client events should be sent from their constituent threads through this
-    pub client_event_in_tx: Sender<ClientMessage>,
+    client_event_in_tx: Sender<ClientMessage>,
     /// Input channel for client events, which should be managed by a global event thread
     client_event_in_rx: Receiver<ClientMessage>,
+    /// Whether we are using UDP multicast for our listeners.
+    use_multicast: bool,
 
     // due to how mpsc channels work, it's probably easier to include the music channel in 
 
@@ -134,7 +149,7 @@ pub struct Server {
 // pub struct 
 
 impl Server {
-    pub fn new(host: String, port_map: PortMap) -> Self {
+    pub fn new(host: String, port_map: PortMap, use_multicast: bool) -> Self {
 
         let (sync_out_tx, sync_out_rx) = mpsc::channel::<VRTPPacket>(MAX_CHAN_SIZE);
         let (client_in_tx, client_in_rx) = mpsc::channel::<ClientMessage>(MAX_CHAN_SIZE);
@@ -148,9 +163,14 @@ impl Server {
             client_event_in_rx: client_in_rx,
             client_event_in_tx: client_in_tx,
             cur_user_id: Arc::new(Mutex::new(0)),
-            extra_ports: Arc::new(HashMap::new())
+            extra_ports: Arc::new(HashMap::new()),
+            use_multicast
 
         }
+    }
+
+    fn get_host(&self) -> &str {
+        return &self.host;
     }
 
 
@@ -169,10 +189,33 @@ impl Server {
         self.start_client_listeners().await;
         // if this fails we're giving up
         self.new_connection_listener().await.unwrap();
+        self.start_audience_mocap_listeners().await;
 
         self.main_server_loop().await;
-
         Ok(())
+
+    }
+
+    async fn start_audience_mocap_listeners(&self) {
+
+        let (mocap_send, mocap_recv) = channel::<OscPacket>(AUDIENCE_BUFFER_CHAN_SIZE);
+        let mocap_in_addr = SocketAddrV4::new("0.0.0.0".parse().unwrap(), self.port_map.audience_mocap_in_port);
+        tokio::spawn(async move {
+            Self::audience_mocap_listener(&mocap_in_addr, mocap_send).await;
+        });
+
+        let mocap_out_ip = if self.use_multicast {
+            let res: Ipv4Addr = MULTICAST_ADDR_STRING.parse().unwrap();
+            assert!(res.is_multicast(), "Must be multcast address");
+            res
+        } else {"0.0.0.0".parse().unwrap()};
+
+        let mocap_out_addr= SocketAddrV4::new(mocap_out_ip, self.port_map.audience_mocap_out_port);
+
+        tokio::spawn(async move {
+            Self::audience_mocap_dispatch(&mocap_out_addr, mocap_recv).await.unwrap();
+        });
+
 
     }
 
@@ -261,6 +304,67 @@ impl Server {
         });
 
         Ok(())
+    }
+
+    async fn audience_mocap_dispatch(socket_addr: &SocketAddrV4, mut listener_channel: Receiver<OscPacket>) -> io::Result<()> {
+
+
+        debug!("Ready to transmit audience mocap on {socket_addr}");
+
+        let sock = UdpSocket::bind(socket_addr).await?;
+
+        loop {
+            let pkt = match listener_channel.recv().await {
+                None => break,
+                Some(data) => encoder::encode(&data).unwrap()
+            };
+
+            sock.send(&pkt).await?;
+
+
+        }
+
+        Ok(())
+
+
+    }
+
+    /// Take in motion capture from audience members and sent it out as soon as we can.
+    /// Audience members don't really need to worry about sending to specific "clients",
+    /// instead they can just forward their data on here, and it will be repeated to any audience members listening.
+    async fn audience_mocap_listener(socket_addr: &SocketAddrV4, listener_channel: Sender<OscPacket>) {
+        // https://github.com/henninglive/tokio-udp-multicast-chat/blob/master/src/main.rs
+
+        // assert!(multicast_socket_addr.ip().is_multicast(), "Must be multcast address");
+
+        info!("Listening for audience mocap on {0}", &socket_addr);
+        let sock = UdpSocket::bind(&socket_addr).await.unwrap();
+
+        let mut listener_buf : [u8; LISTENER_BUF_SIZE] = [0; LISTENER_BUF_SIZE];
+
+        loop {
+            let (bytes_read, _) = match sock.recv_from(&mut listener_buf).await {
+                Err(e) => {
+                    error!("failed to read from listener buffer: {e}");
+                    continue;
+                }
+
+                Ok(b) => b
+            };
+
+            // just forward the raw packets, do as little processing as possible
+            let datagram_data = &listener_buf[0..bytes_read];
+
+            let (_, pkt) = match decoder::decode_udp(datagram_data) {
+                Err(e) => {
+                    error!("Audience mocap listener received something that doesn't seem to be OSC: {e}");
+                    continue;
+                },
+                Ok(r) => r
+            };
+
+            let _ = listener_channel.send(pkt).await;
+        }
     }
 
 

@@ -141,7 +141,8 @@ impl VRLClient for AudienceMember {
                     },
                     Ok(b) => {
                         if b == 0 {
-                            continue
+                            warn!("Client stream seems to be giving EOF, terminating.");
+                            break 'connection;
                         }
                         b
                     }
@@ -171,6 +172,8 @@ impl VRLClient for AudienceMember {
                 }
 
             }
+
+            debug!("we're dead!");
             // select! {
             //
             // }
