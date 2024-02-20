@@ -469,7 +469,7 @@ impl Server {
         );
         client_channel_data.synchronizer_vrtp_out = Some(server_thread_data.synchronizer_to_out_tx.clone());
 
-        let client = match server_user_data.user_type {
+        let mut client = match server_user_data.user_type {
             Audience => {
                 AudienceMember::new(
                     server_user_data.base_user_data.clone(),
@@ -532,12 +532,56 @@ impl Server {
         }
 
     }
-    async fn performer_audio_listener(
-        listening_addr: &SocketAddrV4, users_by_ip: Arc<RwLock<HashMap<String, ServerUserData>>>,
-        audio_channel: Sender<()>
-    ) {
-
-    }
+    // async fn performer_audio_listener(
+    //     listening_addr: &SocketAddrV4, users_by_ip: Arc<RwLock<HashMap<String, ServerUserData>>>,
+    //     audio_channel: Sender<()>
+    // ) {
+    //     info!("Listening for performer audio on {listening_addr}");
+    //
+    //     let sock = UdpSocket::bind(listening_addr).await?;
+    //
+    //     loop {
+    //         let mut bytes_in = bytes::BytesMut::with_capacity(2048);
+    //         let (bytes_read, incoming_addr) = match sock.recv_from(bytes_in.as_mut()).await {
+    //             Err(e) => {
+    //                 error!("failed to read from listener buffer: {e}");
+    //                 continue;
+    //             }
+    //
+    //
+    //
+    //             Ok(b) => b
+    //         };
+    //
+    //         let bytes_in = bytes_in.freeze();
+    //
+    //         // just forward the raw packets, do as little processing as possible
+    //         // let datagram_data = &listener_buf[0..bytes_read];
+    //
+    //         // TODO
+    //         // this is going to be problematic.
+    //         // If we have a read lock on this data structure that is held every single time RTP data is coming in over
+    //         // the stream, we're going to get deadlocked FAST, and the writers (new clients being added) will cause this
+    //         // all to slow to a slog.
+    //         let performer_listener = match users_by_ip.read().await.get(&incoming_addr.ip().to_string()) {
+    //             Some(data) => {
+    //                 if let
+    //             }
+    //         }
+    //
+    //         let (_, pkt) = match decoder::decode_udp(datagram_data) {
+    //             Err(e) => {
+    //                 error!("Audience mocap listener received something that doesn't seem to be OSC: {e}");
+    //                 continue;
+    //             },
+    //             Ok(r) => r
+    //         };
+    //     }
+    //
+    //
+    //
+    //
+    // }
 
 
 
