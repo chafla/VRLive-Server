@@ -76,7 +76,7 @@ pub trait OSCDecodable : Sized {
         let offset = if message.addr.chars().next()? == '/' {1} else {0};
         // trim off the leading slash
         dbg!(message);
-        return Self::deconstruct_osc(&message.addr[offset..], message);
+        Self::deconstruct_osc(&message.addr[offset..], message)
     }
 
     /// Step through an OSC message

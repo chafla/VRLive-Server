@@ -45,7 +45,7 @@ impl OSCDecodable for ServerMessage {
         dbg!(&prefix);
         // this one is special, since it starts the hierarchy
         // TODO come up with a better way to do this
-        let trimmed_prefix = if let Some((start, rest)) = prefix.split_once("/") {
+        let trimmed_prefix = if let Some((start, rest)) = prefix.split_once('/') {
             if start != "server" {
                 error!("Server was given an invalid string.");
 
@@ -59,7 +59,7 @@ impl OSCDecodable for ServerMessage {
         };
 
 
-        if let Some((start, rest)) = trimmed_prefix?.split_once("/") {
+        if let Some((start, rest)) = trimmed_prefix?.split_once('/') {
             match start {
                 "scene" => Some(Self::Scene(SceneMessage::deconstruct_osc(rest, message)?)),
                 "performer" => Some(Self::Performer(PerformerServerMessage::deconstruct_osc(rest, message)?)),
@@ -104,7 +104,7 @@ impl OSCEncodable for SceneMessage {
 
 impl OSCDecodable for SceneMessage {
     fn deconstruct_osc(prefix: &str, message: &OscMessage) -> Option<Self> {
-        if let Some(_) = prefix.split_once("/") {
+        if prefix.split_once('/').is_some() {
             None
         }
         else {
@@ -155,14 +155,14 @@ impl OSCEncodable for BackingMessage {
 
 impl OSCDecodable for BackingMessage {
     fn deconstruct_osc(prefix: &str, message: &OscMessage) -> Option<Self> {
-        if let Some(_) = prefix.split_once("/") {
+        if prefix.split_once('/').is_some() {
             None
         }
         else {
             match prefix {
                 "stop" => Some(Self::Stop),
                 "start" | "new" => {
-                    if message.args.len() > 0 {
+                    if !message.args.is_empty() {
                         if let OscType::Float(f) = message.args[0] {
                             return Some(Self::Start(f))
                         }
@@ -223,7 +223,7 @@ impl OSCEncodable for PerformerServerMessage {
 
 impl OSCDecodable for PerformerServerMessage {
     fn deconstruct_osc(prefix: &str, message: &OscMessage) -> Option<Self> {
-        if let Some((start, rest)) = prefix.split_once("/") {
+        if let Some((start, rest)) = prefix.split_once('/') {
             match start {
                 "matchmake" => Some(Self::MatchMake(MatchMakeMessage::deconstruct_osc(rest, message)?)),
                 "toggle" => Some(Self::Toggle(PerformerToggle::deconstruct_osc(rest, message)?)),
@@ -272,7 +272,7 @@ impl OSCEncodable for MatchMakeMessage {
 impl OSCDecodable for MatchMakeMessage {
     fn deconstruct_osc(prefix: &str, message: &OscMessage) -> Option<Self> {
 
-        if let Some(_) = message.addr.split_once("/") {
+        if message.addr.split_once('/').is_some() {
             return None
         }
 

@@ -40,7 +40,7 @@ impl OSCDecodable for ClientMessage {
     fn deconstruct_osc(working_str: &str, message: &OscMessage) -> Option<Self>
     {
         // TODO add testing to ensure that the deconstructed prefix matches the constructed prefix
-        if let Some((start, rest)) = working_str.split_once("/") {
+        if let Some((start, rest)) = working_str.split_once('/') {
             match start {
                 "any" => todo!(),
                 "audience" => todo!(),
@@ -81,7 +81,7 @@ impl OSCEncodable for PerformerToggle {
             Self::Audio(b) | Self::Actor(b) | Self::Motion(b) => *b
         };
 
-        return OscMessage {
+        OscMessage {
             addr: existing_prefix.join("/"),
             args: vec![OscType::Bool(val)]
         }
@@ -90,7 +90,7 @@ impl OSCEncodable for PerformerToggle {
 
 impl OSCDecodable for PerformerToggle {
     fn deconstruct_osc(prefix: &str, message: &OscMessage) -> Option<Self> {
-        if let Some((start, _)) = prefix.split_once("/") {
+        if let Some((start, _)) = prefix.split_once('/') {
             // if there's a split, the character was in the string
             if message.args.len() != 1 {
                 None
@@ -150,8 +150,8 @@ impl OSCEncodable for PerformerClientMessage {
 impl OSCDecodable for PerformerClientMessage {
     fn deconstruct_osc(prefix: &str, message: &OscMessage) -> Option<Self> {
 
-        if let Some((start, rest)) = prefix.split_once("/") {
-            return match start {
+        if let Some((start, rest)) = prefix.split_once('/') {
+            match start {
                 "toggle" => Some(Self::Toggle(PerformerToggle::deconstruct_osc(rest, message)?)),
                 _ => None
             }

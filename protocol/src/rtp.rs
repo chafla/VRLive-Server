@@ -1,19 +1,15 @@
 use std::sync::Arc;
-use std::time::Duration;
-use log::{debug, error, info, warn};
-/**
-* Mechanism for handling incoming RTP traffic.
-*/
 
-use webrtc::rtp;
+use log::{debug, warn};
+
 use anyhow::Result;
-use webrtc::rtp::packet::Packet;
+
 use webrtc::rtp::codecs::opus;
 use webrtc::rtp::packetizer::Depacketizer;
-use webrtc::util::Unmarshal;
+
 use bytes;
-use bytes::{Bytes, BytesMut};
-use rosc::{OscPacket, decoder};
+use bytes::{Bytes};
+use rosc::{OscPacket};
 use rosc::decoder::decode_udp;
 use tokio::sync::mpsc::Sender;
 use webrtc::api::APIBuilder;
@@ -25,10 +21,10 @@ use webrtc::data_channel::RTCDataChannel;
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::interceptor::registry::Registry;
 use webrtc::peer_connection::configuration::RTCConfiguration;
-use webrtc::peer_connection::{math_rand_alpha, RTCPeerConnection};
+use webrtc::peer_connection::{RTCPeerConnection};
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
-use webrtc::stats::RTCStatsType::DataChannel;
+
 use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
 use webrtc::track::track_local::TrackLocal;
 
@@ -45,8 +41,10 @@ pub fn performer_audio_track(identifier: &str) -> TrackLocalStaticRTP {
 
 // https://github.com/webrtc-rs/webrtc/blob/master/examples
 pub async fn register_performer_mocap_data_channel(conn: &mut WebRTPConnection, mocap_data_out: Sender<OscPacket>) -> Result<Arc<RTCDataChannel>> {
-    let mut options = RTCDataChannelInit::default();
-    options.max_retransmits = Some(0);  // if it's lost it's lost
+    let options = RTCDataChannelInit {
+        max_retransmits: Some(0),
+        ..Default::default()
+    };
     let data_channel = conn.peer_connection.create_data_channel("performer mocap", Some(options)).await?;
     data_channel.on_message(Box::new(move |message| {
         debug!("Incoming mocap data channel open.");
@@ -126,9 +124,9 @@ impl WebRTPConnection {
 
     pub async fn configure_peer_connection(&mut self) -> Result<()> {
         // https://github.com/webrtc-rs/webrtc/blob/master/examples/examples/data-channels/data-channels.rs
-        let mut peer_connection = &mut self.peer_connection;
+        let peer_connection = &mut self.peer_connection;
 
-        let (done_tx, mut done_rx) = tokio::sync::mpsc::channel::<()>(1);
+        let (done_tx, _done_rx) = tokio::sync::mpsc::channel::<()>(1);
 
         // Set the handler for Peer connection state
         // This will notify you when the peer has connected/disconnected
@@ -164,7 +162,7 @@ impl WebRTPConnection {
                 // Register channel opening handling
                 Box::pin(async move {
                     // move data into the box
-                    let d2 = Arc::clone(&d);
+                    let _d2 = Arc::clone(&d);
                     let d_label2 = d_label.clone();
                     let d_id2 = d_id;
 
@@ -219,34 +217,3 @@ impl WebRTPConnection {
 // pub fn handle_incoming_rtp() {
 //     decode()
 // }
-
-/// Decode an incoming opus packet from RTP
-fn decode(packet_data: &Bytes) -> Result<Bytes, ()> {
-    // let mut pkt = match Packet::unmarshal(&mut packet_data) {
-    //     Ok(raw) => raw,
-    //     Err(e) => {
-    //         error!("Failed to decode incoming rtp packet: {e}");
-    //         return Err(format!("Failed to decode incoming rtp packet: {e}"));
-    //     }
-    // };
-
-
-
-    // let data_bytes = bytes::Bytes::from(packet_data);
-
-
-
-
-
-    let mut opus_packet = opus::OpusPacket::default();
-
-    let packet = opus_packet.depacketize(packet_data);
-
-    if let Ok(pkt) = packet {
-        Ok(pkt)
-    }
-    else {
-        Err(())
-    }
-
-}

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use tokio::sync::mpsc::Receiver;
 use bytes::Bytes;
+use log::warn;
 use rosc::OscPacket;
 use tokio::sync::mpsc::Sender;
 use webrtc::track::track_local::TrackLocal;
@@ -40,13 +41,19 @@ impl Performer {
             audio_tx,
         ).await.unwrap();
 
+        let outgoing = Self::create_outgoing_connection(
+            &user_data.fancy_title,
+            base_channels.synchronizer_vrtp_out.take().unwrap(),
+
+        ).await.unwrap();
+
         Self {
             user_data,
             base_channels,
             ports,
             sync_channels: Some((osc_rx, audio_rx)),
             incoming_connection: Arc::new(incoming),
-            outgoing_connection: None
+            outgoing_connection: Arc::new(outgoing)
         }
     }
 
@@ -61,8 +68,10 @@ impl Performer {
         Ok(conn)
     }
 
-    async fn create_outgoing_connection(title: &str, sync_to_out: Sender<VRTPPacket>) {
+    async fn create_outgoing_connection(title: &str, sync_to_out: Sender<VRTPPacket>) -> anyhow::Result<WebRTPConnection> {
         let mut conn = WebRTPConnection::new("Performer out").await;
+        warn!("Outgoing connection unimplemented");
+        Ok(conn)
 
     }
 }
