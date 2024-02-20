@@ -1,5 +1,6 @@
 use clap::{command, Parser};
 use log::LevelFilter;
+use gstreamer;
 
 use server::server::{PortMap, Server};
 use simplelog;
@@ -31,6 +32,8 @@ async fn main() {
             TermLogger::new(LevelFilter::Debug, Config::default(), TerminalMode::Mixed, ColorChoice::Auto),
         ]
     ).unwrap();
+
+    gstreamer::init().unwrap();
 
     let args = Args::parse();
     // server::server::Portmap
