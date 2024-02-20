@@ -1,6 +1,5 @@
 use clap::{command, Parser};
 use log::LevelFilter;
-use gstreamer;
 
 use server::server::{PortMap, Server};
 use simplelog;
@@ -33,7 +32,7 @@ async fn main() {
         ]
     ).unwrap();
 
-    gstreamer::init().unwrap();
+    // gstreamer::init().unwrap();
 
     let args = Args::parse();
     // server::server::Portmap

@@ -24,7 +24,9 @@ use protocol::UserType::{Audience, Performer};
 use protocol::backing_track::BackingTrackData;
 
 use crate::{MAX_CHAN_SIZE, VRTPPacket};
-use crate::client::{AudienceMember, ClientChannelData, ClientPorts, VRLClient};
+use crate::client::{ClientChannelData, ClientPorts, VRLClient};
+
+use crate::audience::AudienceMember;
 
 const HANDSHAKE_BUF_SIZE: usize = 2048;
 const LISTENER_BUF_SIZE: usize = 2048;

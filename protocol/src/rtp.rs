@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 /**
 * Mechanism for handling incoming RTP traffic.
 */
@@ -13,6 +13,9 @@ use webrtc::rtp::packetizer::Depacketizer;
 use webrtc::util::Unmarshal;
 use bytes;
 use bytes::{Bytes, BytesMut};
+use rosc::{OscPacket, decoder};
+use rosc::decoder::decode_udp;
+use tokio::sync::mpsc::Sender;
 use webrtc::api::APIBuilder;
 use webrtc::api::interceptor_registry::register_default_interceptors;
 use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_OPUS};
@@ -29,29 +32,51 @@ use webrtc::stats::RTCStatsType::DataChannel;
 use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
 use webrtc::track::track_local::TrackLocal;
 
-pub fn performer_audio_track() -> TrackLocalStaticRTP {
+pub fn performer_audio_track(identifier: &str) -> TrackLocalStaticRTP {
     TrackLocalStaticRTP::new(
         RTCRtpCodecCapability {
             mime_type: MIME_TYPE_OPUS.to_owned(),
             ..Default::default()
         },
         "performer_audio".to_owned(),
-        "something".to_owned()
-
+        identifier.to_owned()
     )
 }
 
-
 // https://github.com/webrtc-rs/webrtc/blob/master/examples
-pub async fn register_performer_mocap_data_channel(conn: &mut WebRTPConnection) -> Result<Arc<RTCDataChannel>> {
+pub async fn register_performer_mocap_data_channel(conn: &mut WebRTPConnection, mocap_data_out: Sender<OscPacket>) -> Result<Arc<RTCDataChannel>> {
     let mut options = RTCDataChannelInit::default();
     options.max_retransmits = Some(0);  // if it's lost it's lost
-    let data_channel = conn.peer_connection.create_data_channel("performer audio", Some(options)).await?;
+    let data_channel = conn.peer_connection.create_data_channel("performer mocap", Some(options)).await?;
+    data_channel.on_message(Box::new(move |message| {
+        debug!("Incoming mocap data channel open.");
+        let data = message.data;
+        let data_out = mocap_data_out.clone();
+
+        Box::pin(async move {
+            match decode_udp(data.as_ref()) {
+                Err(e) => warn!("Failed to decode incoming mocap data: {e}"),
+                Ok((_, pkt)) => match data_out.send(pkt).await {
+                    Ok(_) => (),
+                    Err(e) => warn!("Got err {e} when sending mocap")
+                }
+            }
+        })
+
+    }));
+
+    let id = conn.identity.clone();
+
+    data_channel.on_buffered_amount_low(Box::new(move || {
+        warn!("Buffer is low in {id}!");
+        Box::pin(async {})
+    })).await;
 
     Ok(data_channel)
 }
 
 pub struct WebRTPConnection {
+    identity: String,
     peer_connection: Arc<RTCPeerConnection>,
 }
 
@@ -64,7 +89,14 @@ impl WebRTPConnection {
         Ok(())
     }
 
-    pub async fn create_peer_connection() -> Result<Arc<RTCPeerConnection>> {
+    pub async fn new(identity: &str) -> Self {
+        Self {
+            identity: identity.to_owned(),
+            peer_connection: Self::create_peer_connection().await.unwrap()
+        }
+    }
+
+    async fn create_peer_connection() -> Result<Arc<RTCPeerConnection>> {
         let mut media_engine = MediaEngine::default();
 
         media_engine.register_default_codecs()?;
@@ -145,19 +177,19 @@ impl WebRTPConnection {
                         println!("Data channel '{d_label2}'-'{d_id2}' open. Random messages will now be sent to any connected DataChannels every 5 seconds");
 
                         Box::pin(async move {
-                            let mut result = Result::<usize>::Ok(0);
-                            while result.is_ok() {
-                                let timeout = tokio::time::sleep(Duration::from_secs(5));
-                                tokio::pin!(timeout);
-
-                                tokio::select! {
-                                _ = timeout.as_mut() =>{
-                                    let message = math_rand_alpha(15);
-                                    println!("Sending '{message}'");
-                                    result = d2.send_text(message).await.map_err(Into::into);
-                                }
-                            };
-                            }
+                            // let mut result = Result::<usize>::Ok(0);
+                            // while result.is_ok() {
+                            //     let timeout = tokio::time::sleep(Duration::from_secs(5));
+                            //     tokio::pin!(timeout);
+                            //
+                            //     tokio::select! {
+                            //     _ = timeout.as_mut() =>{
+                            //         let message = math_rand_alpha(15);
+                            //         println!("Sending '{message}'");
+                            //         result = d2.send_text(message).await.map_err(Into::into);
+                            //     }
+                            // };
+                            // }
                         })
                     }));
 
