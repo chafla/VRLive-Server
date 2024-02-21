@@ -308,7 +308,7 @@ impl Server {
             U: Sync + Send + PartialEq + Debug + Clone + 'static
     {
         let (send, recv) = channel(DEFAULT_CHAN_SIZE);
-        info!("Starting up handler for {label}");
+        info!("Starting up server internal message router for {label}");
         tokio::spawn(async move {
             Self::server_listener(recv, event_channel).await
         });
