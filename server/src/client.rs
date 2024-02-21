@@ -1,6 +1,8 @@
 use std::collections::HashMap;
+use std::net::SocketAddrV4;
 use std::sync::{Arc, RwLock};
 use async_trait::async_trait;
+use bytes::Bytes;
 
 use log::{debug, error, warn};
 use rosc::{encoder, OscPacket};
@@ -15,10 +17,12 @@ use protocol::vrl_packet::VRLOSCPacket;
 use protocol::backing_track::BackingTrackData;
 
 use crate::{AudioPacket, VRTPPacket};
+use crate::client::streaming::braindead_simple_rtp::{RTPSenderOut, SynchronizerData};
 
 pub mod audience;
 pub mod performer;
-mod peer_connection;
+// mod peer_connection;
+mod streaming;
 
 
 /// Client-specific channel data.
@@ -75,17 +79,20 @@ pub struct ClientPorts {
     server_event_port: u16,
     /// Port that new backing tracks will be sent to
     backing_track_port: u16,
+    /// Port that will be receiving VRTP packets
+    vrtp_port: u16,
     /// Any supplemental ports that the client should be listening on.
     extra_ports: Arc<RwLock<HashMap<String, u16>>>
 }
 
 impl ClientPorts {
 
-    pub fn new(server_event_port: u16, backing_track_port: u16, extra_ports: Option<HashMap<String, u16>>) -> Self {
+    pub fn new(server_event_port: u16, backing_track_port: u16, vrtp_port: u16, extra_ports: Option<HashMap<String, u16>>) -> Self {
 
         Self {
             server_event_port,
             backing_track_port,
+            vrtp_port,
             extra_ports: Arc::new(RwLock::new(extra_ports.unwrap_or(HashMap::new())))
         }
     }
@@ -242,6 +249,14 @@ pub trait VRLClient {
             // select! {
             //
             // }
+        }
+    }
+
+    async fn combined_performer_data_out(&self, mut stream_channel: Receiver<Bytes>, client_socket: SocketAddrV4) {
+        'outer: loop {
+            // we really don't care what things look like on the receiving end
+            // all that we care about is blasting a ton of UDP packets at them as quickly as possible
+
         }
     }
 

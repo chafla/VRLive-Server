@@ -1,3 +1,5 @@
+use bytes::Bytes;
+
 pub mod server;
 pub mod client;
 
@@ -6,4 +8,4 @@ pub mod client;
 const MAX_CHAN_SIZE: usize = 2 << 12;
 
 type AudioPacket = ();  // TODO
-type VRTPPacket = ();
+type VRTPPacket = Bytes;

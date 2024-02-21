@@ -1,16 +1,12 @@
 use std::sync::Arc;
 
-use log::{debug, warn};
-
 use anyhow::Result;
-
-use webrtc::rtp::codecs::opus;
-use webrtc::rtp::packetizer::Depacketizer;
-
+use async_trait::async_trait;
 use bytes;
-use bytes::{Bytes};
-use rosc::{OscPacket};
+use bytes::Bytes;
+use log::{debug, warn};
 use rosc::decoder::decode_udp;
+use rosc::OscPacket;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::Mutex;
 use webrtc::api::APIBuilder;
@@ -23,36 +19,24 @@ use webrtc::ice_transport::ice_candidate::RTCIceCandidate;
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::interceptor::registry::Registry;
 use webrtc::peer_connection::configuration::RTCConfiguration;
-use webrtc::peer_connection::{RTCPeerConnection};
-use webrtc::peer_connection::offer_answer_options::RTCOfferOptions;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
+use webrtc::peer_connection::RTCPeerConnection;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
-
 use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
 use webrtc::track::track_local::TrackLocal;
 
-pub fn performer_audio_track(identifier: &str) -> TrackLocalStaticRTP {
-    TrackLocalStaticRTP::new(
-        RTCRtpCodecCapability {
-            mime_type: MIME_TYPE_OPUS.to_owned(),
-            ..Default::default()
-        },
-        "performer_audio".to_owned(),
-        identifier.to_owned()
-    )
-}
 
-pub async fn register_performer_audio_tracks(conn: &mut WebRTPConnection, title: &str) -> Result<()> {
-    let audio_track = performer_audio_track(title);
-
-
-    let chans: Vec<Arc<dyn TrackLocal + Send + Sync>> = vec![Arc::new(audio_track)];
-    conn.register_tracks(&chans[..]).await?;
-
-    Ok(())
-
-}
+// pub async fn register_performer_audio_tracks(conn: &mut WebRTPConnection, title: &str) -> Result<()> {
+//     let audio_track = performer_audio_track(title);
+//
+//
+//     let chans: Vec<Arc<dyn TrackLocal + Send + Sync>> = vec![Arc::new(audio_track)];
+//     conn.register_tracks(&chans[..]).await?;
+//
+//     Ok(())
+//
+// }
 
 // pub fn performer_session_description() -> RTCSessionDescription {
 //
@@ -64,6 +48,9 @@ pub async fn register_performer_mocap_data_channel(conn: &mut WebRTPConnection, 
         max_retransmits: Some(0),
         ..Default::default()
     };
+    // create a new data channel specifically designed to handle incoming motion capture data.
+    // this can happen in isolation as it only impacts the results of this specific data channel,
+    // without touching anything else.
     let data_channel = conn.peer_connection.create_data_channel("performer mocap", Some(options)).await?;
     data_channel.on_message(Box::new(move |message| {
         debug!("Incoming mocap data channel open.");
@@ -293,3 +280,4 @@ impl WebRTPConnection {
 // pub fn handle_incoming_rtp() {
 //     decode()
 // }
+

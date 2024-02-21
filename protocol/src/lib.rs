@@ -8,7 +8,6 @@ pub mod vrl_packet;
 pub mod osc_messages_out;
 pub mod handshake;
 pub mod backing_track;
-pub mod rtp;
 pub type UserIDType = u16;
 
 

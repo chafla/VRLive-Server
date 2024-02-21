@@ -48,6 +48,8 @@ pub struct HandshakeSynAck {
     pub backing_track_port: u16,
     /// Port made available for receiving future server events after handshake completion.
     pub server_event_port: u16,
+    /// Port made available for receiving performer vrtp data
+    pub vrtp_mocap_port: u16,
     /// Port made available for receiving audience motion capture data.
     pub audience_motion_capture_port: u16,
     /// Additional, named ports that the client wishes to let the server know it is making available for data receipt.

@@ -6,6 +6,7 @@ use std::io;
 use std::io::Write;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::Arc;
+use bytes::{Buf, Bytes};
 
 use log::{debug, error, info, warn};
 use rosc::{decoder, OscPacket, encoder};
@@ -35,7 +36,8 @@ const LISTENER_BUF_SIZE: usize = 2048;
 
 const AUDIENCE_BUFFER_CHAN_SIZE: usize = 2048;
 
-const MULTICAST_ADDR_STRING: &str = "226.226.226.226";
+const AUDIENCE_MOCAP_MULTICAST_ADDR: &str = "226.226.226.226";
+const VRTP_MULTICAST_ADDR: &str = "226.226.226.227";
 
 
 /// Messages which can be sent over the client message socket.
@@ -88,7 +90,7 @@ pub struct PortMap {
     client_event_port: u16,
     backing_track_port: u16,
     server_event_in_port: u16,
-    audience_mocap_out_port: u16
+    audience_mocap_out_port: u16,
 }
 
 impl PortMap {
@@ -135,6 +137,8 @@ pub struct Server {
     clients: Arc<RwLock<HashMap<UserIDType, ServerUserData>>>,
     /// Separate association associating them by IP rather than their ID
     clients_by_ip: Arc<RwLock<HashMap<String, ServerUserData>>>,
+    /// Client IDs and their receiver channels
+    client_mocap_out_channels: Arc<RwLock<HashMap<UserIDType, Sender<Bytes>>>>,
     /// Our current lowest user ID, used as a canonical base for adding more.
     cur_user_id: Arc<Mutex<UserIDType>>,
 
@@ -142,12 +146,12 @@ pub struct Server {
     /// Output channel coming from each synchronizer and going to the high-priority output thread.
     synchronizer_to_out_tx: Sender<VRTPPacket>, // TODO add the type here
     /// Hidden internal channel that receives the message inside the output thread
-    synchronizer_to_out_rx: Receiver<VRTPPacket>,
+    synchronizer_to_out_rx: Option<Receiver<VRTPPacket>>,
 
     /// Client events should be sent from their constituent threads through this
     client_event_in_tx: Sender<ClientMessage>,
     /// Input channel for client events, which should be managed by a global event thread
-    client_event_in_rx: Receiver<ClientMessage>,
+    client_event_in_rx: Option<Receiver<ClientMessage>>,
     /// Whether we are using UDP multicast for our listeners.
     use_multicast: bool,
 
@@ -168,8 +172,8 @@ impl Server {
             clients: Arc::new(RwLock::new(HashMap::new())),
             clients_by_ip: Arc::new(RwLock::new(HashMap::new())),
             synchronizer_to_out_tx: sync_out_tx,
-            synchronizer_to_out_rx: sync_out_rx,
-            client_event_in_rx: client_in_rx,
+            synchronizer_to_out_rx: Some(sync_out_rx),
+            client_event_in_rx: Some(client_in_rx),
             client_event_in_tx: client_in_tx,
             cur_user_id: Arc::new(Mutex::new(0)),
             extra_ports: Arc::new(HashMap::new()),
@@ -205,6 +209,14 @@ impl Server {
 
     }
 
+    fn get_ip(&self, multicast_ip: &str, default_ip: &str) -> Ipv4Addr {
+        if self.use_multicast {
+            let res: Ipv4Addr = multicast_ip.parse().unwrap();
+            assert!(res.is_multicast(), "Must be multcast address");
+            res
+        } else {default_ip.parse().unwrap()}
+    }
+
     async fn start_audience_mocap_listeners(&self) {
 
         let (mocap_send, mocap_recv) = channel::<OscPacket>(AUDIENCE_BUFFER_CHAN_SIZE);
@@ -213,18 +225,42 @@ impl Server {
             Self::audience_mocap_listener(&mocap_in_addr, mocap_send).await;
         });
 
-        let mocap_out_ip = if self.use_multicast {
-            let res: Ipv4Addr = MULTICAST_ADDR_STRING.parse().unwrap();
-            assert!(res.is_multicast(), "Must be multcast address");
-            res
-        } else {"0.0.0.0".parse().unwrap()};
+        let mocap_out_ip= self.get_ip(AUDIENCE_MOCAP_MULTICAST_ADDR, "0.0.0.0");
 
         let mocap_out_addr= SocketAddrV4::new(mocap_out_ip, self.port_map.audience_mocap_out_port);
 
         tokio::spawn(async move {
-            Self::audience_mocap_dispatch(&mocap_out_addr, mocap_recv).await.unwrap();
+            Self::udp_data_dispatch(&mocap_out_addr, mocap_recv, |x| Bytes::from(encoder::encode(&x).unwrap())).await.unwrap();
         });
 
+    }
+
+    // TODO OH GOD WE STILL NEED TO HANDLE DISCONNECTS GRACEFULLY
+    async fn start_synchronizer_out(&mut self, port: u16) -> Sender<Bytes> {
+        let synchronized_out_ip = self.get_ip(VRTP_MULTICAST_ADDR, "0.0.0.0");
+        let synchronized_out_addr= SocketAddrV4::new(synchronized_out_ip, port);
+
+        let (mocap_send, mocap_recv) = channel::<Bytes>(AUDIENCE_BUFFER_CHAN_SIZE);
+
+        tokio::spawn(async move {
+            Self::udp_data_dispatch(&synchronized_out_addr, mocap_recv, |x| x).await.unwrap();
+        });
+
+
+        // TODO again, we should have a side task that updates clients in a way that won't be disruptive for sending of data
+        let clients = Arc::clone(&self.client_mocap_out_channels);
+        let mut recv_chan = self.synchronizer_to_out_rx.take().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let data = recv_chan.recv().await.unwrap() as Bytes;
+                for ch in clients.read().await.values() {
+                    ch.send(data.clone()).await.unwrap(); // AUGH
+                }
+                // self.client_mocap_out_channels.read().for_each(|ch| => );
+            }
+        });
+
+        mocap_send
 
     }
 
@@ -249,6 +285,8 @@ impl Server {
             | user_data: &ServerUserData | user_data.backing_track_socket_send.clone(),
         ).await;
 
+        // TODO this needs to be completely torn up: this is a listener not a sender
+        // I'm honestly a little upset I missed
         self.start_listener(
             "server event in",
             self.port_map.server_event_in_port,
@@ -308,6 +346,7 @@ impl Server {
 
                     let mut write_handle = clients_by_ip_local.write().await;
                     write_handle.insert(server_data.base_user_data.remote_ip_addr.to_string(), server_data);
+
                 });
             }
         });
@@ -315,17 +354,22 @@ impl Server {
         Ok(())
     }
 
-    async fn audience_mocap_dispatch(socket_addr: &SocketAddrV4, mut listener_channel: Receiver<OscPacket>) -> io::Result<()> {
+    /// Dispatch data to a UDP socket at a given location.
+    async fn udp_data_dispatch<T, F>(socket_addr: &SocketAddrV4, mut listener_channel: Receiver<T>, data_to_bytes: F) -> io::Result<()>
+        where
+            T: Send + Sync,
+            F: Fn(T) -> Bytes,
+    {
 
 
-        debug!("Ready to transmit audience mocap on {socket_addr}");
+        debug!("Ready to transmit synchronized data on {socket_addr}");
 
         let sock = UdpSocket::bind(socket_addr).await?;
 
         loop {
             let pkt = match listener_channel.recv().await {
                 None => break,
-                Some(data) => encoder::encode(&data).unwrap()
+                Some(data) => data_to_bytes(data)
             };
 
             sock.send(&pkt).await?;
@@ -441,6 +485,7 @@ impl Server {
         let ports = ClientPorts::new(
             synack.server_event_port,
             synack.backing_track_port,
+            synack.vrtp_mocap_port,
             Some(synack.extra_ports),
         );
 
@@ -496,7 +541,7 @@ impl Server {
                     mem.start_main_channels().await;
                 },
                 UserType::Performer => {
-                    let mut aud = performer::Performer::new(
+                    let mut aud = performer::Performer::new_rtc(
                         server_user_data_inner.base_user_data.clone(),
                         client_channel_data,
                         ports,
