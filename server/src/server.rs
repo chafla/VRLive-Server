@@ -19,14 +19,16 @@ use protocol::{osc_messages_out::ServerMessage, UserData, UserIDType};
 use protocol::handshake::{HandshakeAck, HandshakeCompletion, HandshakeSynAck};
 use protocol::osc_messages_in::ClientMessage;
 use protocol::osc_messages_out::PerformerServerMessage;
-use protocol::UserType::{Audience, Performer};
+use protocol::UserType;
 
 use protocol::backing_track::BackingTrackData;
 
 use crate::{MAX_CHAN_SIZE, VRTPPacket};
 use crate::client::{ClientChannelData, ClientPorts, VRLClient};
+use crate::client::performer;
+use crate::client::audience;
 
-use crate::audience::AudienceMember;
+use crate::client::audience::AudienceMember;
 
 const HANDSHAKE_BUF_SIZE: usize = 2048;
 const LISTENER_BUF_SIZE: usize = 2048;
@@ -43,6 +45,11 @@ enum ClientChannelMessage {
     /// TODO we could do something fancy here with typed channels!
     Socket(TcpSocket),
     Message(ClientMessage)
+}
+
+enum UserImpl {
+    PerformerImpl(performer::Performer),
+    AudienceImpl(AudienceMember)
 }
 
 
@@ -447,8 +454,8 @@ impl Server {
         // let ServerUserData
         let server_user_data = ServerUserData {
             user_type: match synack.user_type {
-                1 => Audience,
-                2 => Performer,
+                1 => UserType::Audience,
+                2 => UserType::Performer,
                 e => return Err(format!("Invalid user type specified: {e}")),
             },
             base_user_data: user_data,
@@ -471,20 +478,33 @@ impl Server {
         );
         client_channel_data.synchronizer_vrtp_out = Some(server_thread_data.synchronizer_to_out_tx.clone());
 
-        let mut client = match server_user_data.user_type {
-            Audience => {
-                AudienceMember::new(
-                    server_user_data.base_user_data.clone(),
-                    client_channel_data,
-                    ports,
-                )
-            },
-            Performer => todo!()
-        };
 
+
+
+        let server_user_data_inner = server_user_data.clone();
         // pass off the client to handle themselves
+        // I want to make this trait-based, but it seems like the types in use (particularly with async?) cause some kinda recursion in the type checker
         let _ = tokio::spawn(async move {
-            client.start_main_channels().await
+            match server_user_data_inner.user_type {
+                UserType::Audience => {
+                    let mut mem = AudienceMember::new(
+                        server_user_data_inner.base_user_data.clone(),
+                        client_channel_data,
+                        ports,
+                        socket
+                    );
+                    mem.start_main_channels().await;
+                },
+                UserType::Performer => {
+                    let mut aud = performer::Performer::new(
+                        server_user_data_inner.base_user_data.clone(),
+                        client_channel_data,
+                        ports,
+                        socket
+                    ).await;
+                    aud.start_main_channels().await;
+                }
+            };
         });
 
         // from here on out, it's up to the client to fill things out.
@@ -497,8 +517,8 @@ impl Server {
             &server_user_data.base_user_data.remote_ip_addr,
             our_user_id,
             match &server_user_data.user_type {
-                Audience => "an audience member",
-                Performer => "a performer"
+                UserType::Audience => "an audience member",
+                UserType::Performer => "a performer"
             }
         );
         Ok((our_user_id, server_user_data))

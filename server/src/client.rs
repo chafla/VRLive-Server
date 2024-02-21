@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use async_trait::async_trait;
 
-use log::{debug, error, info, warn};
+use log::{debug, error, warn};
 use rosc::{encoder, OscPacket};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -15,6 +15,10 @@ use protocol::vrl_packet::VRLOSCPacket;
 use protocol::backing_track::BackingTrackData;
 
 use crate::{AudioPacket, VRTPPacket};
+
+pub mod audience;
+pub mod performer;
+mod peer_connection;
 
 
 /// Client-specific channel data.

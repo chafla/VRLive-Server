@@ -1,3 +1,4 @@
+use tokio::net::TcpStream;
 use protocol::UserData;
 use crate::client::{ClientChannelData, ClientPorts, VRLClient};
 
@@ -5,6 +6,7 @@ pub struct AudienceMember {
     user_data: UserData,
     base_channels: ClientChannelData,
     ports: ClientPorts,
+    signaling_channel: TcpStream
 }
 
 impl AudienceMember {
@@ -12,11 +14,13 @@ impl AudienceMember {
     pub fn get_title(&self) -> &str {
         &self.user_data.fancy_title
     }
-    pub fn new(user_data: UserData, base_channels: ClientChannelData, ports: ClientPorts) -> Self {
+    pub fn new(user_data: UserData, base_channels: ClientChannelData, ports: ClientPorts, signaling_channel: TcpStream) -> Self {
         Self {
             user_data,
             base_channels,
             ports,
+            signaling_channel,
+
         }
     }
 }
