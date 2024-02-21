@@ -2,9 +2,11 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::io;
 use std::io::Write;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::ops::Index;
 use std::sync::Arc;
 use bytes::{Buf, Bytes};
 
@@ -159,6 +161,36 @@ pub struct Server {
 
 }
 
+#[derive(Clone, Debug)]
+enum ListenerMessage <U: PartialEq, T: Sync + Send> {
+    Subscribe(U, Sender<T>),
+    Unsubscribe(U)
+}
+
+/// A thread-local struct useful for managing large amounts of listeners, without needing to do obnoxious things with
+/// arcs of mutexes of whatever.
+/// One of these should be created per thread that needs to dispatch to a large amount of senders (read: clients).
+#[derive(Debug)]
+struct Listener<T: Send + Sync, U: Sync + Send + PartialEq> {
+    /// Vector holding onto users and their associated channels for sending data.
+    client_channels: Vec<(U, Sender<T>)>,
+    /// Channel for receiving updates on users.
+    user_update_channel: Receiver<ListenerMessage<U, T>>
+}
+
+impl <T: Sync + Send, U: Sync + Send + PartialEq> Listener<T, U> {
+    pub fn new(user_update_channel: Receiver<ListenerMessage<U, T>>) -> Self {
+        Self {
+            client_channels: vec![],
+            user_update_channel
+        }
+    }
+
+    pub fn remove(&mut self, user: U) {
+        self.client_channels = self.client_channels.into_iter().filter(|(u, _)| user != *u).collect()
+    }
+}
+
 // pub struct 
 
 impl Server {
@@ -294,6 +326,38 @@ impl Server {
         ).await;
 
 
+    }
+
+    async fn server_listener<U, T>(user_update_channel: Receiver<ListenerMessage<U, T>>, mut main_update_channel: Receiver<T>)
+        where
+            T: Sync + Send + Debug + Clone,
+            U: Sync + Send + PartialEq + Debug
+    {
+        let mut listener = Listener::new(user_update_channel);
+        loop {
+            tokio::select! {
+                biased;
+                main_update = main_update_channel.recv() => match main_update {
+                    None => break,  // again, our upstream closed
+                    Some(d) => {
+                        for (_, chan) in &mut listener.client_channels {
+                            chan.send(d.clone()).await.unwrap(); // TODO remove this unwrap at a later time
+                        }
+                    }
+                },
+                user_update = listener.user_update_channel.recv() => {
+                    match user_update {
+                        None => break,
+                        Some(msg) => match msg {
+                            ListenerMessage::Subscribe(res, sender) => listener.client_channels.push((res, sender)),
+                            // this is a linear op but should be happening infrequently enough
+                            ListenerMessage::Unsubscribe(res) => listener.remove(res)
+                        }
+                    }
+                }
+            }
+
+        }
     }
 
     async fn new_connection_listener(&self) -> io::Result<()> {
