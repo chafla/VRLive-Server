@@ -54,7 +54,7 @@ impl OSCDecodable for ClientMessage {
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Copy, Clone)]
 pub enum PerformerToggle {
     Audio(bool),
     Actor(bool),

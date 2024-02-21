@@ -6,7 +6,7 @@ use rosc::{OscMessage, OscType};
 
 use crate::{osc_messages_in::PerformerToggle, OSCDecodable, OSCEncodable};
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub enum ServerMessage {
     Scene(SceneMessage),
     Timing,  // TODO
@@ -76,7 +76,7 @@ impl OSCDecodable for ServerMessage {
 }
 
 /// Messages relating to the scene itself
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Copy, Clone)]
 pub enum SceneMessage {
     State(i32)
 }
@@ -119,7 +119,7 @@ impl OSCDecodable for SceneMessage {
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub enum BackingMessage {
     Stop,
     /// At which timestamp should we start? If negative, start from the beginning.
@@ -183,7 +183,7 @@ impl OSCDecodable for BackingMessage {
 /// also represents the messages being sent to the performer from the server.
 /// still kind of a TODO item
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub enum PerformerServerMessage {
     Ready(bool),
     Toggle(PerformerToggle),
@@ -243,7 +243,7 @@ impl OSCDecodable for PerformerServerMessage {
 }
 
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub enum MatchMakeMessage {
     Request
 }
