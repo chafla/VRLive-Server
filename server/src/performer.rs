@@ -19,9 +19,9 @@ pub struct Performer {
 
     // internal channels
     sync_channels: Option<(Receiver<OscPacket>, Receiver<Bytes>)>,
-
-
 }
+
+const PERFORMER_OFFER: &'static str = "hi1";
 
 impl Performer {
 
@@ -55,6 +55,10 @@ impl Performer {
             incoming_connection: Arc::new(incoming),
             outgoing_connection: Arc::new(outgoing)
         }
+    }
+
+    async fn start_connections() {
+
     }
 
     async fn create_incoming_connection(title: &str, osc_to_sync: Sender<OscPacket>, audio_to_sync: Sender<Bytes>) -> anyhow::Result<WebRTPConnection> {

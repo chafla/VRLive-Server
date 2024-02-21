@@ -12,17 +12,21 @@ use bytes::{Bytes};
 use rosc::{OscPacket};
 use rosc::decoder::decode_udp;
 use tokio::sync::mpsc::Sender;
+use tokio::sync::Mutex;
 use webrtc::api::APIBuilder;
 use webrtc::api::interceptor_registry::register_default_interceptors;
 use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_OPUS};
 use webrtc::data_channel::data_channel_init::RTCDataChannelInit;
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
 use webrtc::data_channel::RTCDataChannel;
+use webrtc::ice_transport::ice_candidate::RTCIceCandidate;
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::interceptor::registry::Registry;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::{RTCPeerConnection};
+use webrtc::peer_connection::offer_answer_options::RTCOfferOptions;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
+use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
 
 use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
@@ -38,6 +42,21 @@ pub fn performer_audio_track(identifier: &str) -> TrackLocalStaticRTP {
         identifier.to_owned()
     )
 }
+
+pub async fn register_performer_audio_tracks(conn: &mut WebRTPConnection, title: &str) -> Result<()> {
+    let audio_track = performer_audio_track(title);
+
+
+    let chans: Vec<Arc<dyn TrackLocal + Send + Sync>> = vec![Arc::new(audio_track)];
+    conn.register_tracks(&chans[..]).await?;
+
+    Ok(())
+
+}
+
+// pub fn performer_session_description() -> RTCSessionDescription {
+//
+// }
 
 // https://github.com/webrtc-rs/webrtc/blob/master/examples
 pub async fn register_performer_mocap_data_channel(conn: &mut WebRTPConnection, mocap_data_out: Sender<OscPacket>) -> Result<Arc<RTCDataChannel>> {
@@ -76,6 +95,7 @@ pub async fn register_performer_mocap_data_channel(conn: &mut WebRTPConnection, 
 pub struct WebRTPConnection {
     identity: String,
     peer_connection: Arc<RTCPeerConnection>,
+    pending_candidates: Arc<Mutex<Vec<RTCIceCandidate>>>
 }
 
 impl WebRTPConnection {
@@ -90,7 +110,8 @@ impl WebRTPConnection {
     pub async fn new(identity: &str) -> Self {
         Self {
             identity: identity.to_owned(),
-            peer_connection: Self::create_peer_connection().await.unwrap()
+            peer_connection: Self::create_peer_connection().await.unwrap(),
+            pending_candidates: Arc::new(Mutex::new(vec![]))
         }
     }
 
@@ -167,12 +188,12 @@ impl WebRTPConnection {
                     let d_id2 = d_id;
 
                     d.on_close(Box::new(move || {
-                        println!("Data channel closed");
+                        debug!("Data channel closed");
                         Box::pin(async {})
                     }));
 
                     d.on_open(Box::new(move || {
-                        println!("Data channel '{d_label2}'-'{d_id2}' open. Random messages will now be sent to any connected DataChannels every 5 seconds");
+                        debug!("Data channel '{d_label2}'-'{d_id2}' open. Random messages will now be sent to any connected DataChannels every 5 seconds");
 
                         Box::pin(async move {
                             // let mut result = Result::<usize>::Ok(0);
@@ -194,11 +215,41 @@ impl WebRTPConnection {
                     // Register text message handling
                     d.on_message(Box::new(move |msg: DataChannelMessage| {
                         let msg_str = String::from_utf8(msg.data.to_vec()).unwrap();
-                        println!("Message from DataChannel '{d_label}': '{msg_str}'");
+                        debug!("Message from DataChannel '{d_label}': '{msg_str}'");
                         Box::pin(async {})
                     }));
                 })
             }));
+
+        // This is what gets called when someone first tries to connect with us:
+        // they get marked as an ICE candidate
+        let ice_pc = Arc::downgrade(&peer_connection);
+        let outer_pending_candidates = Arc::clone(&self.pending_candidates);
+        peer_connection.on_ice_candidate(Box::new(move |candidate| {
+            let ice_inner_pc = ice_pc.clone();
+            let inner_pending_candidates = Arc::clone(&outer_pending_candidates);
+            Box::pin(async move {
+                // we have someone new! Let's go!
+                if let Some(c) = candidate {
+                    // we also haven't dropped our list tracking peer candidates yet
+                    if let Some(pc) = ice_inner_pc.upgrade() {
+                        let desc = pc.remote_description().await;
+                        if desc.is_none() {
+                            let mut pending_candidates = inner_pending_candidates.lock().await;
+                            pending_candidates.push(c);
+                        }
+                        // else if let Err(err) = unimplemented!() {
+                        //     // this unimplemented function should be the mechanism that actually signals the clients
+                        //     // meaning: this should probably be in the handshake to some degree.
+                        //     // clients need to communicate
+                        //     panic!("{}", err)
+                        // }
+                    }
+
+                }
+            })
+
+        }));
 
         Ok(())
 
@@ -208,10 +259,27 @@ impl WebRTPConnection {
 
     }
 
-    pub async fn listen(&mut self) {
+    pub async fn create_offer(&mut self) -> Result<RTCSessionDescription> {
+        let offer = self.peer_connection.create_offer(None).await.unwrap();
+        self.peer_connection.set_local_description(offer).await?;
+        // TODO we should find out how to get ice candidates here, as per 4) on https://developer.mozilla.org/en-US/docs/Web/API/WebRTC_API/Connectivity
+        Ok(self.peer_connection.local_description().await.unwrap())
 
+        // match offer {
+        //     Ok(o) => Some(o),
+        //     // TODO this probably shouldn't panic!
+        //     Err(e) => panic!("{e}")
+        // }
     }
 
+
+    // pub async fn listen(&mut self) -> Result<()> {
+    //     let offer = self.peer_connection.create_offer(None).await?;
+    //     // Create channel that is blocked until ICE Gathering is complete
+    //     // let mut gather_complete = self.peer_connection.gathering_complete_promise().await;
+    // }
+// Sets the LocalDescription, and starts our UDP listeners
+//     peer_connection.set_local_description(offer).await?;
 }
 
 // pub fn handle_incoming_rtp() {
