@@ -384,14 +384,23 @@ impl Server {
             U: Sync + Send + PartialEq + Debug + Clone
     {
         let mut listener = Listener::new(user_update_channel);
+        let mut bad_ids = vec![];
         loop {
             tokio::select! {
                 biased;
                 main_update = main_update_channel.recv() => match main_update {
                     None => break,  // again, our upstream closed
                     Some(d) => {
-                        for (_, chan) in &mut listener.client_channels {
-                            chan.send(d.clone()).await.unwrap(); // TODO remove this unwrap at a later time
+
+                        for (id, chan) in &mut listener.client_channels {
+                            if chan.send(d.clone()).await.is_err() {
+                                // hang onto the IDs that don't have active channels: these clients have probably been dropped
+                                bad_ids.push(id.clone());
+                            }
+                        }
+                        if !bad_ids.is_empty() {
+                            bad_ids.iter().for_each(|id| {listener.remove(id);});
+                            bad_ids.clear();
                         }
                     }
                 },
