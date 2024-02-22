@@ -164,6 +164,7 @@ pub struct Server {
     general_mocap_rx: Option<Receiver<OscPacket>>,
     /// Whether we are using UDP multicast for our listeners.
     use_multicast: bool,
+    late_chans: Option<Arc<LateServerChans>>,
 
     // due to how mpsc channels work, it's probably easier to include the music channel in 
 
@@ -224,6 +225,15 @@ impl <T, U> Listener<T, U>
     }
 }
 
+
+/// Server channels that will not be present on init
+#[derive(Clone, Debug)]
+struct LateServerChans {
+    mocap_sender: Sender<ListenerMessage<(UserIDType, SocketAddrV4), OscPacket>>,
+    server_event_sender: Sender<ListenerMessage<(UserIDType, SocketAddrV4), ServerMessage>>,
+    sync_sender: Sender<ListenerMessage<(UserIDType, SocketAddrV4), Bytes>>
+}
+
 // pub struct 
 
 impl Server {
@@ -250,6 +260,7 @@ impl Server {
             extra_ports: Arc::new(HashMap::new()),
             general_mocap_tx: base_mocap_tx,
             general_mocap_rx: Some(base_mocap_rx),
+            late_chans: None,
 
             use_multicast
 
@@ -275,18 +286,27 @@ impl Server {
 
         self.start_client_listeners().await;
         // if this fails we're giving up
-        self.new_connection_listener().await.unwrap();
+
         self.start_audience_mocap_listeners(self.general_mocap_tx.clone()).await;
 
         // start the synchronizer
         let chan = self.synchronizer_to_out_rx.take().unwrap();
-        self.start_handler::<Bytes, (UserIDType, SocketAddrV4)>(chan, "synchronizer").await;
+        let sync_chan = self.start_handler::<Bytes, (UserIDType, SocketAddrV4)>(chan, "synchronizer").await;
         // and the server events
         let chan = self.server_event_rx.take().unwrap();
-        self.start_handler::<ServerMessage, (UserIDType, SocketAddrV4)>(chan, "server events").await;
+        let event_chan = self.start_handler::<ServerMessage, (UserIDType, SocketAddrV4)>(chan, "server events").await;
         // and the mocap
         let chan = self.general_mocap_rx.take().unwrap();
-        self.start_handler::<OscPacket, (UserIDType, SocketAddrV4)>(chan, "general (audience) mocap").await;
+        let mocap_chan = self.start_handler::<OscPacket, (UserIDType, SocketAddrV4)>(chan, "general (audience) mocap").await;
+
+        self.late_chans = Some(Arc::new(LateServerChans {
+            mocap_sender: mocap_chan,
+            sync_sender: sync_chan,
+            server_event_sender: event_chan
+        }));
+
+        self.new_connection_listener(Arc::clone(&self.late_chans.as_ref().unwrap())).await.unwrap();
+
 
         self.main_server_loop().await;
         Ok(())
@@ -318,50 +338,13 @@ impl Server {
 
     async fn start_audience_mocap_listeners(&self, mocap_send: Sender<OscPacket>) {
 
-        // let (mocap_send, mocap_recv) = channel::<OscPacket>(AUDIENCE_BUFFER_CHAN_SIZE);
         let mocap_in_addr = SocketAddrV4::new("0.0.0.0".parse().unwrap(), self.port_map.audience_mocap_in_port);
         tokio::spawn(async move {
             Self::audience_mocap_listener(&mocap_in_addr, mocap_send).await;
         });
 
-        // let mocap_out_ip= self.get_ip(AUDIENCE_MOCAP_MULTICAST_ADDR, "0.0.0.0");
-
-        // let mocap_out_addr= SocketAddrV4::new(mocap_out_ip, self.port_map.audience_mocap_out_port);
-
-        // tokio::spawn(async move {
-        //     Self::udp_data_dispatch(&mocap_out_addr, mocap_recv, |x| Bytes::from(encoder::encode(&x).unwrap())).await.unwrap();
-        // });
 
     }
-
-    // TODO OH GOD WE STILL NEED TO HANDLE DISCONNECTS GRACEFULLY
-    // async fn start_synchronizer_out(&mut self, port: u16) -> Sender<Bytes> {
-    //     let synchronized_out_ip = self.get_ip(VRTP_MULTICAST_ADDR, "0.0.0.0");
-    //     let synchronized_out_addr= SocketAddrV4::new(synchronized_out_ip, port);
-    //
-    //     let (mocap_send, mocap_recv) = channel::<Bytes>(AUDIENCE_BUFFER_CHAN_SIZE);
-    //
-    //     tokio::spawn(async move {
-    //         Self::udp_data_dispatch(&synchronized_out_addr, mocap_recv, |x| x).await.unwrap();
-    //     });
-    //
-    //
-    //     // TODO again, we should have a side task that updates clients in a way that won't be disruptive for sending of data
-    //     let clients = Arc::clone(&self.client_mocap_out_channels);
-    //     let mut recv_chan = self.synchronizer_to_out_rx.take().unwrap();
-    //     tokio::spawn(async move {
-    //         loop {
-    //             let data = recv_chan.recv().await.unwrap() as Bytes;
-    //             for ch in clients.read().await.values() {
-    //                 ch.send(data.clone()).await.unwrap(); // AUGH
-    //             }
-    //             // self.client_mocap_out_channels.read().for_each(|ch| => );
-    //         }
-    //     });
-    //
-    //     mocap_send
-    //
-    // }
 
     async fn start_listener(&self, fancy_title: &'static str, port: u16, channel_getter: fn(&ServerUserData) -> Sender<TcpStream>) {
         let host = self.host.clone();
@@ -427,7 +410,7 @@ impl Server {
         }
     }
 
-    async fn new_connection_listener(&self) -> io::Result<()> {
+    async fn new_connection_listener(&self, late_channels: Arc<LateServerChans>) -> io::Result<()> {
         let addr = format!("{0}:{1}", self.host, self.port_map.new_connections_port);
         let listener = TcpListener::bind(&addr).await?;
 
@@ -435,8 +418,10 @@ impl Server {
         let clients_by_ip = Arc::clone(&self.clients_by_ip);
         info!("Listening for new connections on {addr}");
         let thread_data = self.create_thread_data();
+        // let late_channels = Arc::clone(&late_channels);
 
         tokio::spawn(async move {
+            let late_chans_inner = Arc::clone(&late_channels);
             loop {
                 let (socket, incoming_addr) = match listener.accept().await {
                     Ok(p) => p,
@@ -445,6 +430,7 @@ impl Server {
                         continue;
                     }
                 };
+                let late_channels_outer = Arc::clone(&late_chans_inner);
 
                 // todo this should probably come out of create_server_data, find a good way to replicate that
                 let thread_data = thread_data.clone();
@@ -457,6 +443,7 @@ impl Server {
                 // TODO add the ability for multiple streams at once
 
                 tokio::spawn(async move {
+                    let chans = Arc::clone(&late_channels_outer);
                     let res = Self::perform_handshake(socket, incoming_addr, thread_data).await;
 
                     if let Err(msg) = res {
@@ -479,7 +466,8 @@ impl Server {
                     write_handle.insert(server_data.base_user_data.remote_ip_addr.to_string(), server_data);
 
 
-
+                    let event_sender = chans.server_event_sender.clone();
+                    // TODO TOMORROW IMPLEMENT THE EVENT SENDER LOGIC N SHIT
 
 
                 });
