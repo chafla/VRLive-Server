@@ -138,7 +138,7 @@ pub trait VRLClient {
             let client_event_chan = self.channels().client_events_in.clone();
             let client_sock_chan = self.channels_mut().client_event_socket_chan.take().unwrap();
             tokio::spawn(async move {
-                Self::client_event_listener(client_event_chan, client_sock_chan).await
+                Self::client_event_listener("Client event", client_event_chan, client_sock_chan).await
             });
         }
     }
@@ -193,18 +193,18 @@ pub trait VRLClient {
 
     /// Thread handling input for any client events.
     /// This will become the new "main" thread for the server keeping it alive.
-    async fn client_event_listener(client_events_out: Sender<ClientMessage>, mut client_socket: Receiver<TcpStream>) {
+    async fn client_event_listener(stream_title: &'static str, client_events_out: Sender<ClientMessage>, mut client_socket: Receiver<TcpStream>) {
 
         // loop: if we lose connection, we can just have the client give us a new handle.
         // unless that one's dead too.
         loop {
             let client_stream = client_socket.recv().await;
             if client_stream.is_none() {
-                debug!("Client event listener shutting down.");
+                debug!("{stream_title} listener shutting down.");
                 break;
             }
             else {
-                debug!("Client event listener is up and ready")
+                debug!("{stream_title} listener is up and ready")
             }
             let mut client_stream = client_stream.unwrap();
 
@@ -215,12 +215,12 @@ pub trait VRLClient {
                 let recv = client_stream.read(&mut client_event_buf).await;
                 let incoming_bytes = match recv {
                     Err(e) => {
-                        warn!("Client stream failed on read ({e}). May be closed?");
+                        warn!("{stream_title} stream failed on read ({e}). May be closed?");
                         break 'connection;
                     },
                     Ok(b) => {
                         if b == 0 {
-                            warn!("Client stream seems to be giving EOF, terminating.");
+                            warn!("{stream_title} stream seems to be giving EOF, terminating.");
                             break 'connection;
                         }
                         b

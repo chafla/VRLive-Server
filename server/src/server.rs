@@ -467,8 +467,11 @@ impl Server {
         let thread_data = self.create_thread_data();
         // let late_channels = Arc::clone(&late_channels);
 
+        let server_event_sender = self.server_event_tx.clone();
+
         tokio::spawn(async move {
             let late_chans_inner = Arc::clone(&late_channels);
+            let server_event_sender_inner = server_event_sender.clone();
             loop {
                 let (socket, incoming_addr) = match listener.accept().await {
                     Ok(p) => p,
@@ -478,7 +481,7 @@ impl Server {
                     }
                 };
                 let late_channels_outer = Arc::clone(&late_chans_inner);
-
+                let server_event_sender_inner = server_event_sender_inner.clone();
                 // todo this should probably come out of create_server_data, find a good way to replicate that
                 let thread_data = thread_data.clone();
                 let clients_local = Arc::clone(&clients);
@@ -502,6 +505,7 @@ impl Server {
 
 
                     {
+                        server_event_sender_inner.send(ServerMessage::Performer(PerformerServerMessage::Ready(true))).await;
                         // sample messages!
                         // self.dispatch_server_event()
                         // let _ = server_data.server_event_update_send.send(ServerMessage::Performer(PerformerServerMessage::Ready(true))).await;
