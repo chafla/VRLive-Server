@@ -1,19 +1,20 @@
 use std::sync::Arc;
-use tokio::sync::mpsc::Receiver;
+
 use bytes::Bytes;
-use log::warn;
 use rosc::OscPacket;
 use tokio::net::TcpStream;
+use tokio::sync::mpsc::Receiver;
 use tokio::sync::mpsc::Sender;
 use webrtc::api::media_engine::MIME_TYPE_OPUS;
 use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
 use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
 use webrtc::track::track_local::TrackLocal;
+
 use protocol::UserData;
+
 use crate::client::{ClientChannelData, ClientPorts, VRLClient};
 use crate::client::streaming::braindead_simple_rtp::{RTPSenderOut, SynchronizerData};
 use crate::client::streaming::peer_connection::{register_performer_mocap_data_channel, WebRTPConnection};
-use crate::client::streaming::Streamer;
 use crate::VRTPPacket;
 
 pub struct Performer

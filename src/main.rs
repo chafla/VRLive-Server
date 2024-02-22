@@ -1,9 +1,9 @@
 use clap::{command, Parser};
 use log::LevelFilter;
-
-use server::server::{PortMap, Server};
 use simplelog;
 use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
+
+use server::server::{PortMap, Server};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]

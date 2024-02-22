@@ -1,18 +1,15 @@
 // use std::sync::mpsc::Receiver;
 
 use std::borrow::Cow;
-use std::char::MAX;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::io;
-use std::io::Write;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-use std::ops::Index;
 use std::sync::Arc;
-use bytes::{Buf, Bytes};
 
+use bytes::{Bytes};
 use log::{debug, error, info, warn};
-use rosc::{decoder, OscPacket, encoder};
+use rosc::{decoder, OscPacket};
 // use serde_json::Result;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpSocket, TcpStream, UdpSocket};
@@ -20,19 +17,16 @@ use tokio::sync::{mpsc::{self, Receiver, Sender}, Mutex, RwLock};
 use tokio::sync::mpsc::channel;
 
 use protocol::{osc_messages_out::ServerMessage, UserData, UserIDType};
+use protocol::backing_track::BackingTrackData;
 use protocol::handshake::{HandshakeAck, HandshakeCompletion, HandshakeSynAck};
 use protocol::osc_messages_in::ClientMessage;
 use protocol::osc_messages_out::PerformerServerMessage;
 use protocol::UserType;
 
-use protocol::backing_track::BackingTrackData;
-
 use crate::{MAX_CHAN_SIZE, VRTPPacket};
 use crate::client::{ClientChannelData, ClientPorts, VRLClient};
-use crate::client::performer;
-use crate::client::audience;
-
 use crate::client::audience::AudienceMember;
+use crate::client::performer;
 
 const DEFAULT_CHAN_SIZE: usize = 2048;
 
@@ -108,7 +102,7 @@ impl PortMap {
             client_event_port: 5655,
             backing_track_port: 5656,
             server_event_in_port: 5657,
-            audience_mocap_in_port: 5658,
+            audience_mocap_in_port: 9000,
             audience_mocap_out_port: 5659,
         }
     }
@@ -550,6 +544,8 @@ impl Server {
                 },
                 Ok(r) => r
             };
+
+            // debug!("Echoing audience mocap!");
 
             let _ = listener_channel.send(pkt).await;
         }

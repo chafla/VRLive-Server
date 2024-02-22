@@ -1,12 +1,10 @@
 use std::io;
+
 use bytes::{BufMut, Bytes, BytesMut};
 use rosc::encoder::encode;
 use rosc::OscPacket;
 use tokio::net::UdpSocket;
-use tokio::sync::mpsc::{Receiver, Sender};
-use super::Streamer;
-use webrtc::rtp;
-use protocol::vrl_packet::VRLOSCPacket;
+use tokio::sync::mpsc::Receiver;
 
 /// Synchronized data representing the data occuring at one timestep
 pub type SynchronizerData = (OscPacket, Bytes, f32);
