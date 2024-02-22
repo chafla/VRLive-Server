@@ -1,5 +1,7 @@
 use tokio::net::TcpStream;
+
 use protocol::UserData;
+
 use crate::client::{ClientChannelData, ClientPorts, VRLClient};
 
 pub struct AudienceMember {
