@@ -447,7 +447,7 @@ impl Server {
 
                 tokio::spawn(async move {
                     let chans = Arc::clone(&late_channels_outer);
-                    let res = Self::perform_handshake(socket, incoming_addr, thread_data).await;
+                    let res = Self::perform_handshake(socket, incoming_addr, thread_data, chans).await;
 
                     if let Err(msg) = res {
                         error!("Attempted handshake with {0} failed: {msg}", incoming_addr);
@@ -467,12 +467,6 @@ impl Server {
 
                     let mut write_handle = clients_by_ip_local.write().await;
                     write_handle.insert(server_data.base_user_data.remote_ip_addr.to_string(), server_data);
-
-
-                    let event_sender = chans.server_event_sender.clone();
-                    // TODO TOMORROW IMPLEMENT THE EVENT SENDER LOGIC N SHIT
-
-
                 });
             }
         });
@@ -551,7 +545,7 @@ impl Server {
 
     /// Perform the handshake. If this completes, it should add a new client.
     /// If this also succeeds, then it should spin up the necessary threads for listening
-    async fn perform_handshake(mut socket: TcpStream, addr: SocketAddr, server_thread_data: ServerThreadData) -> Result<(UserIDType, ServerUserData), String> {
+    async fn perform_handshake(mut socket: TcpStream, addr: SocketAddr, server_thread_data: ServerThreadData, registration_channels: Arc<LateServerChans>) -> Result<(UserIDType, ServerUserData), String> {
         let our_user_id;
         let mut handshake_buf: [u8; HANDSHAKE_BUF_SIZE] = [0; HANDSHAKE_BUF_SIZE];
         // lock the user ID and increment it
