@@ -36,10 +36,14 @@ pub struct ClientChannelData {
     pub backing_track_in: Option<Receiver<BackingTrackData>>,
     /// Pass events from our client to the main server
     pub client_events_in: Sender<ClientMessage>,
+    /// Get mocap events to transmit out to our clients
+    pub audience_mocap_out: Option<Receiver<OscPacket>>,
     /// Get our client event socket from the server
     pub client_event_socket_chan: Option<Receiver<TcpStream>>,
     pub backing_track_socket_chan: Option<Receiver<TcpStream>>,
     pub server_event_socket_chan: Option<Receiver<TcpStream>>,
+    /// Data inbound from the synchronizer
+    pub from_sync_out_chan: Option<Receiver<Bytes>>,
 
     // channels dependent on the synchronizer, thus may exist depending on the type of client that we are
 
@@ -51,25 +55,26 @@ pub struct ClientChannelData {
     pub synchronizer_vrtp_out: Option<Sender<VRTPPacket>>,
 }
 
-impl ClientChannelData {
-    pub fn new(server_events_out: Receiver<ServerMessage>,
-               client_events_in: Sender<ClientMessage>, backing_track_in: Receiver<BackingTrackData>,
-               event_socket_chan: Receiver<TcpStream>, backing_track_socket_chan: Receiver<TcpStream>,
-        server_event_socket_chan: Receiver<TcpStream>,
-    ) -> Self {
-        Self {
-            server_events_out: Some(server_events_out),
-            client_events_in: client_events_in,
-            backing_track_in: Some(backing_track_in),
-            client_event_socket_chan: Some(event_socket_chan),
-            backing_track_socket_chan: Some(backing_track_socket_chan),
-            server_event_socket_chan: Some(server_event_socket_chan),
-            synchronizer_osc_in: None,
-            synchronizer_audio_in: None,
-            synchronizer_vrtp_out: None
-        }
-    }
-}
+// impl ClientChannelData {
+//     pub fn new(server_events_out: Receiver<ServerMessage>,
+//                client_events_in: Sender<ClientMessage>, backing_track_in: Receiver<BackingTrackData>,
+//                event_socket_chan: Receiver<TcpStream>, backing_track_socket_chan: Receiver<TcpStream>,
+//         server_event_socket_chan: Receiver<TcpStream>, mocap_chan: Receiver<OscPacket>
+//     ) -> Self {
+//         Self {
+//             server_events_out: Some(server_events_out),
+//             client_events_in: client_events_in,
+//             backing_track_in: Some(backing_track_in),
+//             client_event_socket_chan: Some(event_socket_chan),
+//             backing_track_socket_chan: Some(backing_track_socket_chan),
+//             server_event_socket_chan: Some(server_event_socket_chan),
+//             synchronizer_osc_in: None,
+//             synchronizer_audio_in: None,
+//             synchronizer_vrtp_out: None,
+//             audience_mocap_out: Some(mocap_chan)
+//         }
+//     }
+// }
 
 /// Remote ports available on the client.
 #[derive(Clone, Debug)]
@@ -78,6 +83,8 @@ pub struct ClientPorts {
     server_event_port: u16,
     /// Port that new backing tracks will be sent to
     backing_track_port: u16,
+    /// Port that audience mocap will be sent to
+    audience_mocap_port: u16,
     /// Port that will be receiving VRTP packets
     vrtp_port: u16,
     /// Any supplemental ports that the client should be listening on.
@@ -86,12 +93,13 @@ pub struct ClientPorts {
 
 impl ClientPorts {
 
-    pub fn new(server_event_port: u16, backing_track_port: u16, vrtp_port: u16, extra_ports: Option<HashMap<String, u16>>) -> Self {
+    pub fn new(server_event_port: u16, backing_track_port: u16, vrtp_port: u16, audience_mocap_port: u16, extra_ports: Option<HashMap<String, u16>>) -> Self {
 
         Self {
             server_event_port,
             backing_track_port,
             vrtp_port,
+            audience_mocap_port,
             extra_ports: Arc::new(RwLock::new(extra_ports.unwrap_or(HashMap::new())))
         }
     }

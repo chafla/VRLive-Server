@@ -54,16 +54,16 @@ enum UserImpl {
 }
 
 
-/// Data tracked per client.
+/// Data tracked on the server per client.
 #[derive(Debug, Clone)]
 pub struct ServerUserData {
     user_type: protocol::UserType,
     base_user_data: UserData,
     // Store some channels that need to be accessible from the outside for sending data in
     /// Send on this channel to update thread on new backing tracks.
-    backing_track_update_send: Sender<BackingTrackData>,
+    // backing_track_update_send: Sender<BackingTrackData>,
     /// Send on this channel to update thread with new server events.
-    server_event_update_send: Sender<ServerMessage>,
+    // server_event_update_send: Sender<ServerMessage>,
 
     // tcp channels
     // these should theoretically be oneshot channels,
@@ -156,9 +156,13 @@ pub struct Server {
     /// Mocap handlers.
     general_mocap_tx: Sender<OscPacket>,
     general_mocap_rx: Option<Receiver<OscPacket>>,
+
+    /// Backing track handlers
+    backing_track_tx: Sender<BackingTrackData>,
+    backing_track_rx: Option<Receiver<BackingTrackData>>,
     /// Whether we are using UDP multicast for our listeners.
     use_multicast: bool,
-    late_chans: Option<Arc<LateServerChans>>,
+    late_chans: Option<Arc<LateServerChans<UserIDType>>>,
 
     // due to how mpsc channels work, it's probably easier to include the music channel in 
 
@@ -222,10 +226,38 @@ impl <T, U> Listener<T, U>
 
 /// Server channels that will not be present on init
 #[derive(Clone, Debug)]
-struct LateServerChans {
-    mocap_sender: Sender<ListenerMessage<(UserIDType, SocketAddrV4), OscPacket>>,
-    server_event_sender: Sender<ListenerMessage<(UserIDType, SocketAddrV4), ServerMessage>>,
-    sync_sender: Sender<ListenerMessage<(UserIDType, SocketAddrV4), Bytes>>
+struct LateServerChans<T>
+    where T: Clone + Debug + PartialEq + Send + Sync
+{
+    mocap_sender: Sender<ListenerMessage<T, OscPacket>>,
+    server_event_sender: Sender<ListenerMessage<T, ServerMessage>>,
+    sync_sender: Sender<ListenerMessage<T, Bytes>>,
+    backing_track_sender: Sender<ListenerMessage<T, BackingTrackData>>
+}
+
+impl <T> LateServerChans<T>
+    where T: Clone + Debug + PartialEq + Send + Sync + 'static
+{
+    pub async fn subscribe(&self, user_type: &UserType, identifier: T, osc_sender: Sender<OscPacket>, server_event_sender: Sender<ServerMessage>, sync_sender: Sender<Bytes>, backing_track_sender: Sender<BackingTrackData>) -> anyhow::Result<()> {
+        self.mocap_sender.send(ListenerMessage::Subscribe(identifier.clone(), osc_sender)).await?;
+        self.server_event_sender.send(ListenerMessage::Subscribe(identifier.clone(), server_event_sender)).await?;
+        self.sync_sender.send(ListenerMessage::Subscribe(identifier.clone(), sync_sender)).await?;
+        if matches!(user_type, UserType::Performer) {
+            self.backing_track_sender.send(ListenerMessage::Subscribe(identifier.clone(), backing_track_sender)).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn unsubscribe(&self, user_type: &UserType, identifier: &'static T) -> anyhow::Result<()> {
+        // these can't just be cloned because they monomorphize down
+        self.mocap_sender.send(ListenerMessage::Unsubscribe(identifier.clone())).await?;
+        self.server_event_sender.send(ListenerMessage::Unsubscribe(identifier.clone())).await?;
+        self.backing_track_sender.send(ListenerMessage::Unsubscribe(identifier.clone())).await?;
+        if matches!(user_type, UserType::Performer) {
+            self.sync_sender.send(ListenerMessage::Unsubscribe(identifier.clone())).await?;
+        }
+        Ok(())
+    }
 }
 
 // pub struct 
@@ -237,6 +269,7 @@ impl Server {
         let (client_in_tx, client_in_rx) = mpsc::channel::<ClientMessage>(MAX_CHAN_SIZE);
         let (server_event_tx, server_event_rx) = channel::<ServerMessage>(MAX_CHAN_SIZE);
         let (base_mocap_tx, base_mocap_rx) = channel(MAX_CHAN_SIZE);
+        let (backing_track_tx, backing_track_rx) = channel(MAX_CHAN_SIZE);
 
 
         Server {
@@ -254,6 +287,8 @@ impl Server {
             extra_ports: Arc::new(HashMap::new()),
             general_mocap_tx: base_mocap_tx,
             general_mocap_rx: Some(base_mocap_rx),
+            backing_track_tx,
+            backing_track_rx: Some(backing_track_rx),
             late_chans: None,
 
             use_multicast
@@ -285,18 +320,22 @@ impl Server {
 
         // start the synchronizer
         let chan = self.synchronizer_to_out_rx.take().unwrap();
-        let sync_chan = self.start_handler::<Bytes, (UserIDType, SocketAddrV4)>(chan, "synchronizer").await;
+        let sync_chan = self.start_handler::<Bytes, UserIDType>(chan, "synchronizer").await;
         // and the server events
         let chan = self.server_event_rx.take().unwrap();
-        let event_chan = self.start_handler::<ServerMessage, (UserIDType, SocketAddrV4)>(chan, "server events").await;
+        let event_chan = self.start_handler::<ServerMessage, UserIDType>(chan, "server events").await;
         // and the mocap
         let chan = self.general_mocap_rx.take().unwrap();
-        let mocap_chan = self.start_handler::<OscPacket, (UserIDType, SocketAddrV4)>(chan, "general (audience) mocap").await;
+        let mocap_chan = self.start_handler::<OscPacket, UserIDType>(chan, "general (audience) mocap").await;
+        // finally, backing tracks
+        let chan = self.backing_track_rx.take().unwrap();
+        let backing_track_chan = self.start_handler::<BackingTrackData, UserIDType>(chan, "backing track").await;
 
         self.late_chans = Some(Arc::new(LateServerChans {
             mocap_sender: mocap_chan,
             sync_sender: sync_chan,
-            server_event_sender: event_chan
+            server_event_sender: event_chan,
+            backing_track_sender: backing_track_chan
         }));
 
         self.new_connection_listener(Arc::clone(&self.late_chans.as_ref().unwrap())).await.unwrap();
@@ -372,6 +411,11 @@ impl Server {
 
     }
 
+    /// Create a listener that waits to receive updates from one channel, and relays them onto a collection of other channels.
+    /// This is designed for the general use case of having one event source, and needing to relay that onto event channels of all users.
+    /// For example, server events.
+    /// On client init, clients will "give" the server a sender to reach their thread that ultimately dispatches server events over their TCP channel.
+    /// If the client dies and its channel gets dropped, we astutely handle that and remove them from the list here.
     async fn server_listener<U, T>(user_update_channel: Receiver<ListenerMessage<U, T>>, mut main_update_channel: Receiver<T>)
         where
             T: Sync + Send + Debug + Clone,
@@ -413,7 +457,7 @@ impl Server {
         }
     }
 
-    async fn new_connection_listener(&self, late_channels: Arc<LateServerChans>) -> io::Result<()> {
+    async fn new_connection_listener(&self, late_channels: Arc<LateServerChans<UserIDType>>) -> io::Result<()> {
         let addr = format!("{0}:{1}", self.host, self.port_map.new_connections_port);
         let listener = TcpListener::bind(&addr).await?;
 
@@ -459,7 +503,8 @@ impl Server {
 
                     {
                         // sample messages!
-                        let _ = server_data.server_event_update_send.send(ServerMessage::Performer(PerformerServerMessage::Ready(true))).await;
+                        // self.dispatch_server_event()
+                        // let _ = server_data.server_event_update_send.send(ServerMessage::Performer(PerformerServerMessage::Ready(true))).await;
                     }
 
                     let mut write_handle = clients_local.write().await;
@@ -542,10 +587,16 @@ impl Server {
         }
     }
 
+    async fn dispatch_server_event(&self, message: &ServerMessage) {
+        if self.server_event_tx.send(message.clone()).await.is_err() {
+            panic!("Failed to send server message!")
+        }
+    }
+
 
     /// Perform the handshake. If this completes, it should add a new client.
     /// If this also succeeds, then it should spin up the necessary threads for listening
-    async fn perform_handshake(mut socket: TcpStream, addr: SocketAddr, server_thread_data: ServerThreadData, registration_channels: Arc<LateServerChans>) -> Result<(UserIDType, ServerUserData), String> {
+    async fn perform_handshake(mut socket: TcpStream, addr: SocketAddr, server_thread_data: ServerThreadData, registration_channels: Arc<LateServerChans<UserIDType>>) -> Result<(UserIDType, ServerUserData), String> {
         let our_user_id;
         let mut handshake_buf: [u8; HANDSHAKE_BUF_SIZE] = [0; HANDSHAKE_BUF_SIZE];
         // lock the user ID and increment it
@@ -608,11 +659,14 @@ impl Server {
             synack.server_event_port,
             synack.backing_track_port,
             synack.vrtp_mocap_port,
+            synack.audience_motion_capture_port,
             Some(synack.extra_ports),
         );
 
         let (backing_track_send, backing_track_recv) = mpsc::channel::<BackingTrackData>(MAX_CHAN_SIZE);
         let (server_event_out_send, server_event_out_recv) = mpsc::channel::<ServerMessage>(MAX_CHAN_SIZE);
+        let (audience_mocap_out_send, audience_mocap_out_recv) = mpsc::channel::<OscPacket>(MAX_CHAN_SIZE);
+        let (out_from_sync_tx, out_from_sync_rx) = mpsc::channel::<Bytes>(MAX_CHAN_SIZE);
 
         let (client_event_socket_out, client_event_socket_in) = mpsc::channel::<TcpStream>(MAX_CHAN_SIZE);
         let (backing_track_socket_tx, backing_track_socket_rx) = mpsc::channel::<TcpStream>(MAX_CHAN_SIZE);
@@ -626,8 +680,8 @@ impl Server {
                 e => return Err(format!("Invalid user type specified: {e}")),
             },
             base_user_data: user_data,
-            backing_track_update_send: backing_track_send,
-            server_event_update_send: server_event_out_send,
+            // backing_track_update_send: backing_track_send,
+            // server_event_update_send: server_event_out_send,
             client_event_socket_send: client_event_socket_out,
             backing_track_socket_send: backing_track_socket_tx,
             server_event_socket_send: server_event_socket_out
@@ -635,15 +689,22 @@ impl Server {
 
         // return server_user_data
 
-        let mut client_channel_data = ClientChannelData::new(
-            server_event_out_recv,
-            server_thread_data.client_events_in_tx.clone(),
-            backing_track_recv,
-            client_event_socket_in,
-            backing_track_socket_rx,
-            server_event_socket_in,
-        );
-        client_channel_data.synchronizer_vrtp_out = Some(server_thread_data.synchronizer_to_out_tx.clone());
+        // oh boy I'm a little worried about stress testing this
+        let mut client_channel_data = ClientChannelData {
+            server_events_out: Some(server_event_out_recv),
+            client_events_in: server_thread_data.client_events_in_tx.clone(),
+            backing_track_in: Some(backing_track_recv),
+            client_event_socket_chan: Some(client_event_socket_in),
+            backing_track_socket_chan: Some(backing_track_socket_rx),
+            server_event_socket_chan: Some(server_event_socket_in),
+            audience_mocap_out: Some(audience_mocap_out_recv),
+            from_sync_out_chan: Some(out_from_sync_rx),
+            synchronizer_osc_in: None,
+            synchronizer_audio_in: None,
+            synchronizer_vrtp_out: Some(server_thread_data.synchronizer_to_out_tx.clone()),
+
+        };
+        // client_channel_data.synchronizer_vrtp_out =
 
 
 
@@ -673,6 +734,9 @@ impl Server {
                 }
             };
         });
+
+        registration_channels.subscribe(&server_user_data.user_type, our_user_id.clone(), audience_mocap_out_send, server_event_out_send, out_from_sync_tx, backing_track_send).await.unwrap();
+        // registration_channels.server_event_sender.send(ListenerMessage::Subscribe(our_user_id, server_event_out_send)).await.unwrap();
 
         // from here on out, it's up to the client to fill things out.
 

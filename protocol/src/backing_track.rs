@@ -36,6 +36,7 @@ fn get_backing_track_directory() -> String {
 //     Ok()
 // }
 
+#[derive(Clone, Debug)]
 pub struct BackingTrackData {
     data: Arc<Vec<u8>>,
     filename: String,
