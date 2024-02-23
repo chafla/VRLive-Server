@@ -6,11 +6,11 @@ use std::fmt::Debug;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::Arc;
-use rustyline_async;
 
-use bytes::{Bytes};
+use bytes::Bytes;
 use log::{debug, error, info, warn};
 use rosc::{decoder, OscPacket};
+use rustyline_async;
 use rustyline_async::Readline;
 use rustyline_async::ReadlineEvent::{Eof, Interrupted, Line};
 // use serde_json::Result;
