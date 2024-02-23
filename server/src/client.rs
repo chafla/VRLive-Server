@@ -4,7 +4,7 @@ use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use rosc::{encoder, OscPacket};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -140,6 +140,12 @@ pub trait VRLClient {
             tokio::spawn(async move {
                 Self::client_event_listener("Client event", client_event_chan, client_sock_chan).await
             });
+
+            let backing_track_chan = self.channels_mut().backing_track_in.take().unwrap();
+            let backing_track_sock = self.channels_mut().backing_track_socket_chan.take().unwrap();
+            tokio::spawn(async move {
+                Self::backing_track_sender(backing_track_sock, backing_track_chan).await
+            });
         }
     }
 
@@ -154,6 +160,8 @@ pub trait VRLClient {
                 debug!("Server event listener is up and ready")
             }
             let mut client_stream = client_stream.unwrap();
+
+            debug!("Server event sender has gotten a client stream!");
 
             loop {
                 let res = sender_in.recv().await;
@@ -207,6 +215,8 @@ pub trait VRLClient {
                 debug!("{stream_title} listener is up and ready")
             }
             let mut client_stream = client_stream.unwrap();
+
+            debug!("{stream_title} track handler has received a stream!");
 
             let mut client_event_buf: [u8; 1024];
 
@@ -268,30 +278,44 @@ pub trait VRLClient {
     }
 
     /// Thread responsible for updating the backing track as needed.
-    async fn backing_track_sender(&self, mut sock_channel: Receiver<TcpStream>, mut backing_track_stream: Receiver<BackingTrackData>) {
+    async fn backing_track_sender(mut sock_channel: Receiver<TcpStream>, mut backing_track_stream: Receiver<BackingTrackData>) {
         'outer: loop {
             let client_stream = sock_channel.recv().await;
             if client_stream.is_none() {
-                debug!("Client event listener shutting down.");
+                debug!("Backing track sender shutting down.");
                 break;
             }
             else {
-                debug!("Client event listener is up and ready")
+                debug!("Backing track sender is up and ready")
             }
             let mut client_stream = client_stream.unwrap();
+
+            debug!("Backing track sender has received a stream!");
 
             loop {
                 // block and wait
                 let incoming_backing_track_msg = match backing_track_stream.recv().await {
                     Some(msg) => msg,
-                    None => break 'outer
+                    None => {
+                        warn!("Backing track stream source is dead, the other side must have been dropped!");
+                        break 'outer
+                    }
                 };
 
-                // todo find a good and clever way to write the filename out
-                if let Err(e) = client_stream.write(incoming_backing_track_msg.get_data()).await {
-                    error!("Failed to write backing track out to a client: {e}");
-                    continue;
+
+                debug!("Writing backing track out to client");
+                match client_stream.write(incoming_backing_track_msg.get_data()).await {
+                    Err(e) => {
+                        error!("Failed to write backing track out to a client: {e}");
+                        client_stream.shutdown().await.unwrap();
+                        continue 'outer;
+                    }
+                    Ok(b) => {
+                        debug!("Wrote {b} bytes worth of backing track out to client!")
+                    }
+
                 }
+
             }
         }
 

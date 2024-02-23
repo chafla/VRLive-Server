@@ -3,6 +3,7 @@ use std::env;
 use std::io::Read;
 
 use std::sync::Arc;
+use bytes::{BufMut, Bytes, BytesMut};
 use tokio::io;
 use tokio::io::AsyncReadExt;
 
@@ -38,7 +39,7 @@ fn get_backing_track_directory() -> String {
 
 #[derive(Clone, Debug)]
 pub struct BackingTrackData {
-    data: Arc<Vec<u8>>,
+    data: Bytes,
     filename: String,
 }
 
@@ -46,19 +47,29 @@ impl BackingTrackData {
     pub async fn open(filename: &str) -> io::Result<Self> {
         let mut file = File::open(filename).await?;
         let mut buf = Vec::<u8>::new();
-        let _ = file.read(&mut buf).await?;
+        let _ = file.read_to_end(&mut buf).await?;
+        let mut bytes_data = BytesMut::new();
+        // convert to utf-8
+        let filename_bytes = filename.as_bytes();
+        // append the filename
+
+        let header_len = filename_bytes.len() + 2;
+        let body_length = buf.len();
+
+        bytes_data.put("NEWTRACK".as_bytes());
+        bytes_data.put_u16(header_len as u16);
+        bytes_data.put_u32(body_length as u32);
+        bytes_data.put_u16(filename_bytes.len() as u16);
+        bytes_data.put(filename_bytes);
+        bytes_data.put(buf.as_slice());
         Ok(Self {
-            data: Arc::new(buf),
+            data: bytes_data.freeze(),
             filename: filename.to_owned()
         })
     }
     
-    pub fn get_data(&self) -> &Arc<Vec<u8>> {
+    pub fn get_data(&self) -> &Bytes {
         &self.data
-    }
-    
-    pub fn get_data_handle(&self) -> Arc<Vec<u8>> {
-        Arc::clone(&self.data)
     }
     
     fn get_filename(&self) -> &str {

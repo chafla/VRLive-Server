@@ -6,10 +6,13 @@ use std::fmt::Debug;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::Arc;
+use rustyline_async;
 
 use bytes::{Bytes};
 use log::{debug, error, info, warn};
 use rosc::{decoder, OscPacket};
+use rustyline_async::Readline;
+use rustyline_async::ReadlineEvent::{Eof, Interrupted, Line};
 // use serde_json::Result;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpSocket, TcpStream, UdpSocket};
@@ -241,9 +244,10 @@ impl <T> LateServerChans<T>
     pub async fn subscribe(&self, user_type: &UserType, identifier: T, osc_sender: Sender<OscPacket>, server_event_sender: Sender<ServerMessage>, sync_sender: Sender<Bytes>, backing_track_sender: Sender<BackingTrackData>) -> anyhow::Result<()> {
         self.mocap_sender.send(ListenerMessage::Subscribe(identifier.clone(), osc_sender)).await?;
         self.server_event_sender.send(ListenerMessage::Subscribe(identifier.clone(), server_event_sender)).await?;
-        self.sync_sender.send(ListenerMessage::Subscribe(identifier.clone(), sync_sender)).await?;
+        self.backing_track_sender.send(ListenerMessage::Subscribe(identifier.clone(), backing_track_sender)).await?;
         if matches!(user_type, UserType::Performer) {
-            self.backing_track_sender.send(ListenerMessage::Subscribe(identifier.clone(), backing_track_sender)).await?;
+            self.sync_sender.send(ListenerMessage::Subscribe(identifier.clone(), sync_sender)).await?;
+
         }
         Ok(())
     }
@@ -303,9 +307,44 @@ impl Server {
 
     pub async fn main_server_loop(&mut self) {
 
+        let (mut readline, mut shared_writer) = Readline::new("> ".into()).unwrap();
         loop {
+            let line = match readline.readline().await {
+                Err(e) => {
+                    println!("Failed to read line: {e}");
+                    continue;
+                },
+                Ok(Eof | Interrupted) => break,
+                Ok(Line(str)) => str
+            };
+
+            let (start, rest) = match line.split_once(" ") {
+                Some((x, y)) => (x, Some(y)),
+                None => (line.as_str(), None)
+            };
+
+            match (start, rest) {
+                ("backing", Some(path)) => {
+                    match BackingTrackData::open(path).await {
+                        Err(e) => {
+                            error!("Failed to load backing track at {path}: {e}");
+                        }
+                        Ok(data) => self.backing_track_tx.send(data).await.unwrap()
+                    }
+
+
+                },
+                _ => (),
+            }
+
             // TODO
         }
+
+        warn!("Execution was interrupted by user!")
+
+    }
+
+    pub async fn change_backing_track() {
 
     }
 
@@ -361,9 +400,9 @@ impl Server {
             U: Sync + Send + PartialEq + Debug + Clone + 'static
     {
         let (send, recv) = channel(DEFAULT_CHAN_SIZE);
-        info!("Starting up server internal message router for {label}");
+        // info!("Starting up server internal message router for {label}");
         tokio::spawn(async move {
-            Self::server_listener(recv, event_channel).await
+            Self::server_listener(label, recv, event_channel).await
         });
 
         send
@@ -387,6 +426,8 @@ impl Server {
         });
     }
 
+    /// Start new listeners for client TCP connections.
+    /// These will listen for inbound connections on a given port and pass them along to worker threads that will handle them from there.
     async fn start_client_listeners(&self) {
         self.start_listener(
             "client event",
@@ -400,8 +441,8 @@ impl Server {
             | user_data: &ServerUserData | user_data.backing_track_socket_send.clone(),
         ).await;
 
-        // TODO this needs to be completely torn up: this is a listener not a sender
-        // I'm honestly a little upset I missed
+        // // TODO this needs to be completely torn up: this is a listener not a sender
+        // // I'm honestly a little upset I missed
         self.start_listener(
             "server event in",
             self.port_map.server_event_in_port,
@@ -416,20 +457,28 @@ impl Server {
     /// For example, server events.
     /// On client init, clients will "give" the server a sender to reach their thread that ultimately dispatches server events over their TCP channel.
     /// If the client dies and its channel gets dropped, we astutely handle that and remove them from the list here.
-    async fn server_listener<U, T>(user_update_channel: Receiver<ListenerMessage<U, T>>, mut main_update_channel: Receiver<T>)
+    async fn server_listener<U, T>(label: &'static str, user_update_channel: Receiver<ListenerMessage<U, T>>, mut main_update_channel: Receiver<T>)
         where
             T: Sync + Send + Debug + Clone,
             U: Sync + Send + PartialEq + Debug + Clone
     {
         let mut listener = Listener::new(user_update_channel);
         let mut bad_ids = vec![];
+        info!("Internal server listener for {label} has started.");
+        // pin the future so it doesn't actually get "cancelled", meaning that the channel doesn't get closed
+        // let recv_fut = main_update_channel.recv();
+        // tokio::pin!(recv_fut);
         loop {
+
             tokio::select! {
                 biased;
                 main_update = main_update_channel.recv() => match main_update {
-                    None => break,  // again, our upstream closed
+                    None => {
+                        warn!("Internal server listener for {label} is shutting down due to the other side being dropped");
+                        break
+                    },  // again, our upstream closed
                     Some(d) => {
-
+                        debug!("Internal server listener got data for {label}");
                         for (id, chan) in &mut listener.client_channels {
                             if chan.send(d.clone()).await.is_err() {
                                 // hang onto the IDs that don't have active channels: these clients have probably been dropped
@@ -446,15 +495,24 @@ impl Server {
                     match user_update {
                         None => break,
                         Some(msg) => match msg {
-                            ListenerMessage::Subscribe(res, sender) => listener.client_channels.push((res, sender)),
+                            ListenerMessage::Subscribe(res, sender) => {
+                                debug!("User {0:?} has been subscribed for {label}", &res);
+                                listener.client_channels.push((res, sender));
+
+                            },
                             // this is a linear op but should be happening infrequently enough
-                            ListenerMessage::Unsubscribe(res) => {listener.remove(&res);}
+                            ListenerMessage::Unsubscribe(res) => {
+                                debug!("User {0:?} has been unsubscribed for {label}", &res);
+                                listener.remove(&res);
+                            }
                         }
                     }
                 }
             }
 
         }
+
+        warn!("{label} internal listener shutting down!");
     }
 
     async fn new_connection_listener(&self, late_channels: Arc<LateServerChans<UserIDType>>) -> io::Result<()> {
