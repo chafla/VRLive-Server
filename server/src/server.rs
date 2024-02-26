@@ -8,7 +8,7 @@ use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::Arc;
 
 use bytes::Bytes;
-use log::{debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 use rosc::{decoder, OscBundle, OscPacket};
 use rustyline_async;
 use rustyline_async::Readline;
@@ -150,7 +150,7 @@ pub struct Server {
     /// Output channel coming from each synchronizer and going to the high-priority output thread.
     synchronizer_to_out_tx: Sender<VRTPPacket>, // TODO add the type here
     /// Hidden internal channel that receives the message inside the output thread
-    synchronizer_to_out_rx: Option<Receiver<Bytes>>,
+    synchronizer_to_out_rx: Option<Receiver<VRTPPacket>>,
 
     /// Client events should be sent from their constituent threads through this
     client_event_in_tx: Sender<ClientMessage>,
@@ -238,14 +238,14 @@ struct LateServerChans<T>
 {
     mocap_sender: Sender<ListenerMessage<T, OscPacket>>,
     server_event_sender: Sender<ListenerMessage<T, ServerMessage>>,
-    sync_sender: Sender<ListenerMessage<T, Bytes>>,
+    sync_sender: Sender<ListenerMessage<T, VRTPPacket>>,
     backing_track_sender: Sender<ListenerMessage<T, BackingTrackData>>
 }
 
 impl <T> LateServerChans<T>
     where T: Clone + Debug + PartialEq + Send + Sync + 'static
 {
-    pub async fn subscribe(&self, user_type: &UserType, identifier: T, osc_sender: Sender<OscPacket>, server_event_sender: Sender<ServerMessage>, sync_sender: Sender<Bytes>, backing_track_sender: Sender<BackingTrackData>) -> anyhow::Result<()> {
+    pub async fn subscribe(&self, user_type: &UserType, identifier: T, osc_sender: Sender<OscPacket>, server_event_sender: Sender<ServerMessage>, sync_sender: Sender<VRTPPacket>, backing_track_sender: Sender<BackingTrackData>) -> anyhow::Result<()> {
         self.mocap_sender.send(ListenerMessage::Subscribe(identifier.clone(), osc_sender)).await?;
         self.server_event_sender.send(ListenerMessage::Subscribe(identifier.clone(), server_event_sender)).await?;
         self.backing_track_sender.send(ListenerMessage::Subscribe(identifier.clone(), backing_track_sender)).await?;
@@ -363,7 +363,7 @@ impl Server {
 
         // start the synchronizer
         let chan = self.synchronizer_to_out_rx.take().unwrap();
-        let sync_chan = self.start_handler::<Bytes, UserIDType>(chan, "synchronizer").await;
+        let sync_chan = self.start_handler::<VRTPPacket, UserIDType>(chan, "synchronizer").await;
         // and the server events
         let chan = self.server_event_rx.take().unwrap();
         let event_chan = self.start_handler::<ServerMessage, UserIDType>(chan, "server events").await;
@@ -383,6 +383,7 @@ impl Server {
 
         self.new_connection_listener(Arc::clone(&self.late_chans.as_ref().unwrap())).await.unwrap();
         self.start_performer_audio_listener().await;
+        self.start_performer_mocap_listener().await;
 
         self.main_server_loop().await;
         Ok(())
@@ -430,6 +431,14 @@ impl Server {
         });
     }
 
+    async fn start_performer_mocap_listener(&self) {
+        let audio_in_addr = SocketAddrV4::new(("127.0.0.1").parse().unwrap(), self.port_map.performer_mocap_in_port);
+        let users_by_ip = Arc::clone(&self.clients_by_ip);
+        tokio::spawn(async move {
+            Self::performer_mocap_listener(&audio_in_addr, users_by_ip).await.unwrap();
+        });
+    }
+
     async fn start_listener(&self, fancy_title: &'static str, port: u16, channel_getter: fn(&ServerUserData) -> Sender<TcpStream>) {
         let host = self.host.clone();
         let host_map = Arc::clone(&self.clients_by_ip);
@@ -461,6 +470,12 @@ impl Server {
             | user_data: &ServerUserData | user_data.server_event_socket_send.clone(),
         ).await;
 
+        // self.start_listener(
+        //     "server event in",
+        //     self.port_map.server_event_in_port,
+        //     | user_data: &ServerUserData | user_data.server_event_socket_send.clone(),
+        // ).await;
+
 
     }
 
@@ -490,7 +505,7 @@ impl Server {
                         break
                     },  // again, our upstream closed
                     Some(d) => {
-                        debug!("Internal server listener got data for {label}");
+                        info!("Internal server listener got data for {label}");
                         for (id, chan) in &mut listener.client_channels {
                             if chan.send(d.clone()).await.is_err() {
                                 // hang onto the IDs that don't have active channels: these clients have probably been dropped
@@ -740,7 +755,7 @@ impl Server {
         let (backing_track_send, backing_track_recv) = mpsc::channel::<BackingTrackData>(MAX_CHAN_SIZE);
         let (server_event_out_send, server_event_out_recv) = mpsc::channel::<ServerMessage>(MAX_CHAN_SIZE);
         let (audience_mocap_out_send, audience_mocap_out_recv) = mpsc::channel::<OscPacket>(MAX_CHAN_SIZE);
-        let (out_from_sync_tx, out_from_sync_rx) = mpsc::channel::<Bytes>(MAX_CHAN_SIZE);
+        let (out_from_sync_tx, out_from_sync_rx) = mpsc::channel::<VRTPPacket>(MAX_CHAN_SIZE);
 
         let (client_event_socket_out, client_event_socket_in) = mpsc::channel::<TcpStream>(MAX_CHAN_SIZE);
         let (backing_track_socket_tx, backing_track_socket_rx) = mpsc::channel::<TcpStream>(MAX_CHAN_SIZE);
@@ -803,11 +818,13 @@ impl Server {
                     mem.start_main_channels().await;
                 },
                 UserType::Performer => {
-                    let mut aud = performer::Performer::new_rtc(
+                    let mut aud = performer::Performer::new_rtp(
                         server_user_data_inner.base_user_data.clone(),
                         client_channel_data,
                         ports,
                         socket,
+                        performer_audio_rx,
+                        performer_mocap_rx
                     ).await;
                     aud.start_main_channels().await;
                 }
@@ -864,7 +881,86 @@ impl Server {
         }
 
     }
-    async fn performer_audio_listener(
+
+
+
+    // todo this is copy pasted
+    async fn performer_mocap_listener(
+        listening_addr: &SocketAddrV4, users_by_ip: Arc<RwLock<HashMap<String, ServerUserData>>>,
+    ) -> io::Result<()> {
+        info!("Listening for performer mocap on {listening_addr}");
+
+        let sock = UdpSocket::bind(listening_addr).await?;
+        // let mut bytes_in;
+        let mut listener_buf: [u8; LISTENER_BUF_SIZE];// = [0; LISTENER_BUF_SIZE];
+        loop {
+            // bytes_in = bytes::BytesMut::with_capacity(4096);
+            listener_buf = [0; LISTENER_BUF_SIZE];
+            let (bytes_read, incoming_addr) = match sock.recv_from(&mut listener_buf).await {
+                Err(e) => {
+                    error!("failed to read from listener buffer: {e}");
+                    continue;
+                }
+                Ok(b) => b
+            };
+
+            // let bytes_in = bytes_in.freeze();
+            trace!("Got {bytes_read} from {0}", &incoming_addr);
+
+            // just forward the raw packets, do as little processing as possible
+            // let datagram_data = &listener_buf[0..bytes_read];
+
+            // this is going to be problematic.
+            // If we have a read lock on this data structure that is held every single time RTP data is coming in over
+            // the stream, we're going to get deadlocked FAST, and the writers (new clients being added) will cause this
+            // all to slow to a slog.
+            // dbg!(&users_by_ip.read().await);
+            let performer_listener = match users_by_ip.read().await.get(&incoming_addr.ip().to_string()) {
+                None => {
+                    warn!("Got performer mocap data from someone who we haven't handshaked with!");
+                    continue;
+                }
+                Some(data) => {
+                    if !matches!(data.user_type, UserType::Performer) {
+                        warn!("An audience member tried to send mocap data to performer channel!");
+                        continue;
+                    }
+                    data.performer_mocap_sender.clone()
+                }
+            };
+
+            let datagram_data = &listener_buf[0..bytes_read];
+
+            let pkt = match decoder::decode_udp(datagram_data) {
+                Err(e) => {
+                    error!("Audience mocap listener received something that doesn't seem to be OSC: {e}");
+                    continue;
+                },
+                Ok((_, OscPacket::Message(m))) => {
+                    warn!("Expected bundle, got single message in performer mocap {m:?}");
+                    continue;
+                },
+                Ok((_, OscPacket::Bundle(bndl))) => bndl
+            };
+
+            // debug!("Echoing audience mocap!");
+
+            // let _ = performer_listener.send(pkt).await;
+
+            // dbg!(&pkt);
+
+            if let Err(e) = performer_listener.send(pkt).await {
+                error!("Failed to pass performer mocap data to the client: {e}");
+            }
+        }
+    }
+
+
+
+
+
+
+        async fn performer_audio_listener(
         listening_addr: &SocketAddrV4, users_by_ip: Arc<RwLock<HashMap<String, ServerUserData>>>,
     ) -> io::Result<()> {
         info!("Listening for performer audio on {listening_addr}");
@@ -884,7 +980,7 @@ impl Server {
             };
 
             // let bytes_in = bytes_in.freeze();
-            debug!("Got {bytes_read} from {0}", &incoming_addr);
+            trace!("Got {bytes_read} from {0}", &incoming_addr);
 
             // just forward the raw packets, do as little processing as possible
             // let datagram_data = &listener_buf[0..bytes_read];
@@ -901,7 +997,7 @@ impl Server {
                 }
                 Some(data) => {
                     if !matches!(data.user_type, UserType::Performer) {
-                        warn!("An audience member tried to send mocap data!");
+                        warn!("An audience member tried to send vocal data!");
                         continue;
                     }
                     data.performer_audio_sender.clone()
@@ -916,7 +1012,7 @@ impl Server {
                 Ok(r) => r
             };
 
-            dbg!(&pkt);
+            // dbg!(&pkt);
 
             if let Err(e) = performer_listener.send(pkt).await {
                 error!("Failed to pass performer mocap data to the client: {e}");

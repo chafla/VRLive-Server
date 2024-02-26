@@ -16,6 +16,9 @@ use crate::client::{ClientChannelData, ClientPorts, VRLClient};
 use crate::client::streaming::braindead_simple_rtp::{RTPSenderOut, SynchronizerData};
 use crate::client::streaming::peer_connection::{register_performer_mocap_data_channel, WebRTPConnection};
 use crate::{AudioPacket, VRTPPacket};
+use crate::client::synchronizer::Synchronizer;
+
+const CLOCK_RATE: f32 = 48000.0;
 
 pub struct Performer
 {
@@ -31,6 +34,8 @@ pub struct Performer
     /// Channels necessary for the synchronizer.
     /// These should both be consumed at once.
     sync_channels: Option<(Receiver<OscBundle>, Receiver<AudioPacket>)>,
+
+    // synchronizer: Synchronizer
 }
 
 const PERFORMER_OFFER: &'static str = "hi1";
@@ -44,19 +49,28 @@ impl Performer {
     // pub async fn new_rtp(
     //     user_data: UserData, base_channels: ClientChannelData, ports: ClientPorts, signaling_channel: TcpStream
     // )
-    
+
     pub async fn new_rtp(
-        user_data: UserData, base_channels: ClientChannelData, ports: ClientPorts, signaling_channel: TcpStream,
-        audio_from_sync: Receiver<AudioPacket>, mocap_from_sync: Receiver<OscBundle>
+        user_data: UserData, mut base_channels: ClientChannelData, ports: ClientPorts, signaling_channel: TcpStream,
+        audio_to_sync: Receiver<AudioPacket>, mocap_to_sync: Receiver<OscBundle>
     ) -> Self {
+
+
+        let mut synchronizer = Synchronizer::new(&base_channels.synchronizer_vrtp_out.take().unwrap());
+        // let sync_out = base_channels.synchronizer_vrtp_out.take().unwrap();
+        tokio::spawn(async move {
+            synchronizer.intake(mocap_to_sync, audio_to_sync, CLOCK_RATE).await;
+        });
+
         Self {
             user_data,
             base_channels,
             ports,
             signaling_channel,
-            sync_channels: Some((mocap_from_sync, audio_from_sync)),
+            sync_channels: None,
             streaming_connection: None,
-            rtp_stream: None
+            rtp_stream: None,
+            // synchronizer: Synchronizer::new()
         }
     }
     pub async fn new_rtc(
@@ -85,7 +99,8 @@ impl Performer {
             signaling_channel,
             sync_channels: Some((osc_rx, audio_rx)),
             streaming_connection: Some(Arc::new(incoming)),
-            rtp_stream: None
+            rtp_stream: None,
+            // synchronizer: Synchronizer::new()
         }
     }
 

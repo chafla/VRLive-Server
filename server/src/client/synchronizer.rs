@@ -1,9 +1,10 @@
-use std::cmp::Ordering;
+use std::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use log::warn;
+use log::{debug, error, info, trace, warn};
 use rosc::{OscBundle, OscPacket};
 use tokio::sync::mpsc::{Sender, Receiver};
+use tokio::time::Instant;
 use webrtc::rtp::packet::Packet as Packet;
 use crate::VRTPPacket;
 
@@ -12,16 +13,16 @@ use crate::VRTPPacket;
 pub struct RTPMeta {
     /// Timestamps for RTP headers can have a random start, so this stores t=0.
     /// This should be in unix time
-    zero_time: SystemTime,
+    zero_time: u32,
     /// Clock rates are variable as well. Should give us a good safe conversion factor
     clock_rate: f32
 }
 
 
 impl RTPMeta {
-    pub fn new(unix_time_ns: u64, clock_rate: f32) -> Self {
+    pub fn new(unix_time_ns: u32, clock_rate: f32) -> Self {
         Self {
-            zero_time: UNIX_EPOCH + Duration::from_nanos(unix_time_ns),
+            zero_time: unix_time_ns,
             clock_rate
         }
     }
@@ -39,6 +40,11 @@ impl RTPPacket {
             packet,
             meta
         }
+    }
+
+    /// Raw timestamp since zero time
+    pub fn raw_timestamp(&self) -> u32 {
+        self.packet.header.timestamp + self.meta.zero_time
     }
 }
 
@@ -162,22 +168,23 @@ impl PartialOrd for OscData {
 pub struct Synchronizer {
     // mocap_in: Receiver<OscBundle>,
     // audio_in: Receiver<RTPPacket>,
-    // combined_out: Sender<VRTPPacket>,
+    combined_out: Sender<VRTPPacket>,
     /// Two heaps, sorted by timestamps.
     /// Should automatically keep our data sorted as it is ingested.
-    audio_heap: BinaryHeap<RTPPacket>,
-    mocap_heap: BinaryHeap<OscData>,
+    audio_heap: BinaryHeap<Reverse<RTPPacket>>,
+    mocap_heap: BinaryHeap<Reverse<OscData>>,
     /// The time at which the synchronizer was started. Used for re-syncing.
     zero_time: u32
 }
 
 impl Synchronizer {
 
-    pub fn new() -> Self {
+    pub fn new(audio_out: &Sender<VRTPPacket>) -> Self {
         Self {
             // mocap_in,
             // audio_in,
             // combined_out,
+            combined_out: audio_out.clone(),
             audio_heap: BinaryHeap::new(),
             mocap_heap: BinaryHeap::new(),
             zero_time: 0
@@ -192,20 +199,22 @@ impl Synchronizer {
     pub async fn intake(&mut self, mut mocap_in: Receiver<OscBundle>, mut audio_in: Receiver<Packet>, audio_clock_rate: f32) {
         let mut rtp_meta_base: Option<RTPMeta> = None;
         let mut last_handled_timestamp = SystemTime::now();
+
+        // analytics
+        let mut durs_micro = 0;
+        let mut n_packets_through = 0;
+        let mut last_time = Instant::now();
+
+        let mut last_audio_timestamp = 0;
+        let mut audio_duration_ts = 0;
+        let mut n_audio_packets = 0;
+
+        let mut last_mocap_timestamp = 0;
+        let mut mocap_duration_ts = 0;
+        let mut n_mocap_packets = 0;
         loop {
             let sync_packet = tokio::select! {
-                mocap = mocap_in.recv() => {
-                    let data = match mocap {
-                        None => {
-                            warn!("Sync mocap in shutting down");
-                            break
-                        }
-                        Some(d) => {
-                            OscData::from(d)
-                        }
-                    };
-                    SynchronizerPacket::Mocap(data)
-                },
+                biased;  // make sure audio gets handled first
                 audio = audio_in.recv() => {
                     match audio {
                         None => {
@@ -217,7 +226,7 @@ impl Synchronizer {
                                 Some(m) => m,
                                 None => {
                                     let new_base = RTPMeta::new(
-                                            d.header.timestamp as u64,
+                                            d.header.timestamp,
                                             audio_clock_rate
                                         );
                                     rtp_meta_base = Some(new_base);
@@ -225,17 +234,81 @@ impl Synchronizer {
                                 }
 
                             };
-                            SynchronizerPacket::Audio(RTPPacket::new(
+                            let cur_ts = d.header.timestamp as u64;
+
+                            trace!("dt: {}", cur_ts - last_audio_timestamp);
+                            audio_duration_ts += (cur_ts - last_audio_timestamp);
+                            last_audio_timestamp = d.header.timestamp as u64;
+                            n_audio_packets += 1;
+                            trace!("cur_ts: {cur_ts}");
+
+                            let rtp = RTPPacket::new(
                                 d,
                                 working_meta
-                            ))
+                            );
+
+                            let mut mocap_parts = vec![];
+                            if !self.mocap_heap.is_empty() {
+                                // time to pull all the mocap packets into one bunch
+
+                                while let Some(Reverse(x)) = self.mocap_heap.pop() {
+                                    mocap_parts.push(x)
+                                }
+                            }
+
+                            if let Err(e) = self.combined_out.send(VRTPPacket::Raw(mocap_parts, rtp)).await {
+                                error!("Failed to send to sync out: channel likely closed ({e})");
+                                break;
+                            }
+
+                            // self.audio_heap.push(Reverse(rtp));
+
+                            // SynchronizerPacket::Audio(rtp)
                         }
                     }
                 },
 
+                mocap = mocap_in.recv() => {
+                    let data = match mocap {
+                        None => {
+                            warn!("Sync mocap in shutting down");
+                            break
+                        }
+                        Some(d) => {
+                            let osc_pkt = OscData::from(d);
+                            self.mocap_heap.push(Reverse(osc_pkt));
+                            // osc_pkt
+                        }
+                    };
+                    // SynchronizerPacket::Mocap(data)
+                },
+
             };
 
-            dbg!(&sync_packet);
+            if (n_packets_through % 500 == 0) {
+                info!("Current pressure:");
+                info!("Audio: {}", self.audio_heap.len());
+                info!("Mocap: {}", self.mocap_heap.len())
+            }
+
+            n_packets_through += 1;
+            let cur_time = Instant::now();
+            let dur = cur_time - last_time;
+            trace!("Last packet took {}ms", dur.as_micros() as f64 / 100.0);
+            durs_micro += dur.as_millis();
+            last_time = cur_time;
+
+
+            // debug!("")
+            trace!("Average packet time is currently {}ms", (durs_micro / n_packets_through) as f64);
+            if n_audio_packets > 0 {
+                trace!("Average audio timestamp difference is {}", (audio_duration_ts / n_audio_packets) as f64);
+            }
+
+
+
+
+            // dbg!(&sync_packet);
 
             // if self.audio_heap.len() >
 

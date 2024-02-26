@@ -23,7 +23,7 @@ pub mod audience;
 pub mod performer;
 // mod peer_connection;
 mod streaming;
-mod synchronizer;
+pub mod synchronizer;
 
 
 /// Client-specific channel data.
@@ -45,7 +45,7 @@ pub struct ClientChannelData {
     pub backing_track_socket_chan: Option<Receiver<TcpStream>>,
     pub server_event_socket_chan: Option<Receiver<TcpStream>>,
     /// Data inbound from the synchronizer
-    pub from_sync_out_chan: Option<Receiver<Bytes>>,
+    pub from_sync_out_chan: Option<Receiver<VRTPPacket>>,
 
     // channels dependent on the synchronizer, thus may exist depending on the type of client that we are
 
@@ -120,6 +120,8 @@ pub trait VRLClient {
     fn channels_mut(&mut self) -> &mut ClientChannelData;
 
     fn user_data(&self) -> &UserData;
+
+    // async fn start_custom_channels(&mut self);
 
     /// Start all of the main channel tasks.
     async fn start_main_channels(&mut self) {
@@ -289,6 +291,22 @@ pub trait VRLClient {
             // all that we care about is blasting a ton of UDP packets at them as quickly as possible
 
         }
+    }
+
+    async fn synchronized_data_sender(mut synchronized_data_out: Receiver<VRTPPacket>) {
+        debug!("Synchronized data sender is up and ready!");
+        loop {
+            let incoming_message = match synchronized_data_out.recv().await {
+                None => {
+                    warn!("Synchronized data sender is shutting down!");
+                    break;
+                },
+                Some(VRTPPacket::Encoded(b)) => b,
+                Some(raw@VRTPPacket::Raw(_, _)) => raw.into()
+            };
+            // todo stuff
+        }
+        // TODO process this data before it's sent
     }
 
     /// Thread responsible for updating the backing track as needed.
