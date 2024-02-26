@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use log::{debug, error, info, warn};
-use rosc::{decoder, OscPacket};
+use rosc::{decoder, OscBundle, OscPacket};
 use rustyline_async;
 use rustyline_async::Readline;
 use rustyline_async::ReadlineEvent::{Eof, Interrupted, Line};
@@ -18,6 +18,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpSocket, TcpStream, UdpSocket};
 use tokio::sync::{mpsc::{self, Receiver, Sender}, Mutex, RwLock};
 use tokio::sync::mpsc::channel;
+use webrtc::rtp::packet::Packet;
+use webrtc::util::Unmarshal;
 
 use protocol::{osc_messages_out::ServerMessage, UserData, UserIDType};
 use protocol::backing_track::BackingTrackData;
@@ -67,6 +69,8 @@ pub struct ServerUserData {
     // backing_track_update_send: Sender<BackingTrackData>,
     /// Send on this channel to update thread with new server events.
     // server_event_update_send: Sender<ServerMessage>,
+    performer_audio_sender: Sender<Packet>,
+    performer_mocap_sender: Sender<OscBundle>,
 
     // tcp channels
     // these should theoretically be oneshot channels,
@@ -378,7 +382,7 @@ impl Server {
         }));
 
         self.new_connection_listener(Arc::clone(&self.late_chans.as_ref().unwrap())).await.unwrap();
-
+        self.start_performer_audio_listener().await;
 
         self.main_server_loop().await;
         Ok(())
@@ -416,6 +420,14 @@ impl Server {
         });
 
 
+    }
+
+    async fn start_performer_audio_listener(&self) {
+        let audio_in_addr = SocketAddrV4::new(("127.0.0.1").parse().unwrap(), self.port_map.audio_in_port);
+        let users_by_ip = Arc::clone(&self.clients_by_ip);
+        tokio::spawn(async move {
+            Self::performer_audio_listener(&audio_in_addr, users_by_ip).await.unwrap();
+        });
     }
 
     async fn start_listener(&self, fancy_title: &'static str, port: u16, channel_getter: fn(&ServerUserData) -> Sender<TcpStream>) {
@@ -734,6 +746,9 @@ impl Server {
         let (backing_track_socket_tx, backing_track_socket_rx) = mpsc::channel::<TcpStream>(MAX_CHAN_SIZE);
         let (server_event_socket_out, server_event_socket_in) = mpsc::channel::<TcpStream>(MAX_CHAN_SIZE);
 
+        let (performer_audio_tx, performer_audio_rx) = mpsc::channel(MAX_CHAN_SIZE);
+        let (performer_mocap_tx, performer_mocap_rx) = mpsc::channel(MAX_CHAN_SIZE);
+
         // let ServerUserData
         let server_user_data = ServerUserData {
             user_type: match synack.user_type {
@@ -746,7 +761,9 @@ impl Server {
             // server_event_update_send: server_event_out_send,
             client_event_socket_send: client_event_socket_out,
             backing_track_socket_send: backing_track_socket_tx,
-            server_event_socket_send: server_event_socket_out
+            server_event_socket_send: server_event_socket_out,
+            performer_audio_sender: performer_audio_tx,
+            performer_mocap_sender: performer_mocap_tx
         };
 
         // return server_user_data
@@ -790,7 +807,7 @@ impl Server {
                         server_user_data_inner.base_user_data.clone(),
                         client_channel_data,
                         ports,
-                        socket
+                        socket,
                     ).await;
                     aud.start_main_channels().await;
                 }
@@ -847,56 +864,70 @@ impl Server {
         }
 
     }
-    // async fn performer_audio_listener(
-    //     listening_addr: &SocketAddrV4, users_by_ip: Arc<RwLock<HashMap<String, ServerUserData>>>,
-    //     audio_channel: Sender<()>
-    // ) {
-    //     info!("Listening for performer audio on {listening_addr}");
-    //
-    //     let sock = UdpSocket::bind(listening_addr).await?;
-    //
-    //     loop {
-    //         let mut bytes_in = bytes::BytesMut::with_capacity(2048);
-    //         let (bytes_read, incoming_addr) = match sock.recv_from(bytes_in.as_mut()).await {
-    //             Err(e) => {
-    //                 error!("failed to read from listener buffer: {e}");
-    //                 continue;
-    //             }
-    //
-    //
-    //
-    //             Ok(b) => b
-    //         };
-    //
-    //         let bytes_in = bytes_in.freeze();
-    //
-    //         // just forward the raw packets, do as little processing as possible
-    //         // let datagram_data = &listener_buf[0..bytes_read];
-    //
-    //         // TODO
-    //         // this is going to be problematic.
-    //         // If we have a read lock on this data structure that is held every single time RTP data is coming in over
-    //         // the stream, we're going to get deadlocked FAST, and the writers (new clients being added) will cause this
-    //         // all to slow to a slog.
-    //         let performer_listener = match users_by_ip.read().await.get(&incoming_addr.ip().to_string()) {
-    //             Some(data) => {
-    //                 if let
-    //             }
-    //         }
-    //
-    //         let (_, pkt) = match decoder::decode_udp(datagram_data) {
-    //             Err(e) => {
-    //                 error!("Audience mocap listener received something that doesn't seem to be OSC: {e}");
-    //                 continue;
-    //             },
-    //             Ok(r) => r
-    //         };
-    //     }
-    //
-    //
-    //
-    //
-    // }
+    async fn performer_audio_listener(
+        listening_addr: &SocketAddrV4, users_by_ip: Arc<RwLock<HashMap<String, ServerUserData>>>,
+    ) -> io::Result<()> {
+        info!("Listening for performer audio on {listening_addr}");
+
+        let sock = UdpSocket::bind(listening_addr).await?;
+        // let mut bytes_in;
+        let mut listener_buf : [u8; LISTENER_BUF_SIZE];// = [0; LISTENER_BUF_SIZE];
+        loop {
+            // bytes_in = bytes::BytesMut::with_capacity(4096);
+            listener_buf = [0; LISTENER_BUF_SIZE];
+            let (bytes_read, incoming_addr) = match sock.recv_from(&mut listener_buf).await {
+                Err(e) => {
+                    error!("failed to read from listener buffer: {e}");
+                    continue;
+                }
+                Ok(b) => b
+            };
+
+            // let bytes_in = bytes_in.freeze();
+            debug!("Got {bytes_read} from {0}", &incoming_addr);
+
+            // just forward the raw packets, do as little processing as possible
+            // let datagram_data = &listener_buf[0..bytes_read];
+
+            // this is going to be problematic.
+            // If we have a read lock on this data structure that is held every single time RTP data is coming in over
+            // the stream, we're going to get deadlocked FAST, and the writers (new clients being added) will cause this
+            // all to slow to a slog.
+            // dbg!(&users_by_ip.read().await);
+            let performer_listener = match users_by_ip.read().await.get(&incoming_addr.ip().to_string()) {
+                None => {
+                    warn!("Got performer audio data from someone who we haven't handshaked with!");
+                    continue;
+                }
+                Some(data) => {
+                    if !matches!(data.user_type, UserType::Performer) {
+                        warn!("An audience member tried to send mocap data!");
+                        continue;
+                    }
+                    data.performer_audio_sender.clone()
+                }
+            };
+
+            let pkt = match Packet::unmarshal(&mut listener_buf.as_ref()) {
+                Err(e) => {
+                    error!("Audience audio listener received something that doesn't seem to be OSC: {e}");
+                    continue;
+                },
+                Ok(r) => r
+            };
+
+            dbg!(&pkt);
+
+            if let Err(e) = performer_listener.send(pkt).await {
+                error!("Failed to pass performer mocap data to the client: {e}");
+            }
+
+        }
+
+
+
+
+    }
 
 
 

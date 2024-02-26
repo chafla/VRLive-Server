@@ -4,7 +4,7 @@ use anyhow::Result;
 use bytes;
 use log::{debug, warn};
 use rosc::decoder::decode_udp;
-use rosc::OscPacket;
+use rosc::{OscBundle, OscPacket};
 use tokio::sync::mpsc::Sender;
 use tokio::sync::Mutex;
 use webrtc::api::APIBuilder;
@@ -38,7 +38,7 @@ use webrtc::track::track_local::TrackLocal;
 // }
 
 // https://github.com/webrtc-rs/webrtc/blob/master/examples
-pub async fn register_performer_mocap_data_channel(conn: &mut WebRTPConnection, mocap_data_out: Sender<OscPacket>) -> Result<Arc<RTCDataChannel>> {
+pub async fn register_performer_mocap_data_channel(conn: &mut WebRTPConnection, mocap_data_out: Sender<OscBundle>) -> Result<Arc<RTCDataChannel>> {
     let options = RTCDataChannelInit {
         max_retransmits: Some(0),
         ..Default::default()
@@ -55,10 +55,11 @@ pub async fn register_performer_mocap_data_channel(conn: &mut WebRTPConnection, 
         Box::pin(async move {
             match decode_udp(data.as_ref()) {
                 Err(e) => warn!("Failed to decode incoming mocap data: {e}"),
-                Ok((_, pkt)) => match data_out.send(pkt).await {
+                Ok((_, OscPacket::Bundle(b))) => match data_out.send(b).await {
                     Ok(_) => (),
                     Err(e) => warn!("Got err {e} when sending mocap")
-                }
+                },
+                Ok((_, OscPacket::Message(_))) => panic!("Recieved a message where we needed a packet")
             }
         })
 

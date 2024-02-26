@@ -1,10 +1,14 @@
 use std::io;
+use std::net::SocketAddr;
 
 use bytes::{BufMut, Bytes, BytesMut};
+use log::{error, trace};
 use rosc::encoder::encode;
 use rosc::OscPacket;
 use tokio::net::UdpSocket;
-use tokio::sync::mpsc::Receiver;
+use tokio::sync::mpsc::{Receiver, Sender};
+use webrtc::rtp::packet::Packet;
+use webrtc::util::Unmarshal;
 
 /// Synchronized data representing the data occuring at one timestep
 pub type SynchronizerData = (OscPacket, Bytes, f32);
@@ -66,6 +70,56 @@ impl RTPSenderOut<SynchronizerData> {
 impl RTPSenderOut<Bytes> {
     pub fn on_message(&self, data: Bytes) -> Bytes {
         data
+    }
+}
+
+pub struct RTPReceiver<T: Send + Sync> {
+    socket: UdpSocket,
+    data_out: Sender<T>
+}
+
+impl <T: Send + Sync> RTPReceiver<T> {
+    pub fn new(socket: UdpSocket, data_channel: Sender<T>) -> Self {
+        Self {
+            socket,
+            data_out: data_channel
+        }
+    }
+
+    async fn receive(&mut self) -> io::Result<(Bytes, SocketAddr)> {
+        let mut bytes_buf = BytesMut::with_capacity(2048);
+        let addr = match self.socket.recv_from(bytes_buf.as_mut()).await {
+            Err(e) => {
+                error!("Getting RTP packet failed... ({e})");
+                return Err(e);
+            },
+            Ok((b, addr)) => {
+                trace!("Recieved {b} from {addr}");
+                addr
+            }
+        };
+
+        Ok((bytes_buf.freeze(), addr))
+    }
+}
+
+impl RTPReceiver<Packet> {
+    pub async fn read_and_parse(&mut self) -> Result<Packet, String> {
+        let (mut bytes, addr) = match self.receive().await {
+            Ok(b) => b,
+            Err(e) => {
+                error!("Failed to receive bytes {e}!");
+                return Err(format!("Failed to receive bytes! ({e})"))
+            }
+        };
+        let packet = match Packet::unmarshal(&mut bytes) {
+            Ok(p) => p,
+            Err(e) => {
+                error!("Failed to decode RTP packet: {e}");
+                return Err(format!("Failed to decode RTP packet from {0}: {e}", &addr))
+            }
+        };
+        Ok(packet)
     }
 }
 

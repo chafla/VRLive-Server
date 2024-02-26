@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::net::SocketAddrV4;
+use std::net::{SocketAddr, SocketAddrV4};
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
@@ -7,8 +7,9 @@ use bytes::Bytes;
 use log::{debug, error, warn};
 use rosc::{encoder, OscPacket};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
+use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::mpsc::{Receiver, Sender};
+use webrtc::rtp::packet::Packet;
 
 use protocol::{OSCDecodable, OSCEncodable, UserData};
 use protocol::backing_track::BackingTrackData;
@@ -22,6 +23,7 @@ pub mod audience;
 pub mod performer;
 // mod peer_connection;
 mod streaming;
+mod synchronizer;
 
 
 /// Client-specific channel data.
@@ -199,6 +201,8 @@ pub trait VRLClient {
 
     }
 
+    // async fn synchronizer_loop(mocap_in: Receiver<OscPacket>, audio_in: Receiver<Bytes>)
+
     /// Thread handling input for any client events.
     /// This will become the new "main" thread for the server keeping it alive.
     async fn client_event_listener(stream_title: &'static str, client_events_out: Sender<ClientMessage>, mut client_socket: Receiver<TcpStream>) {
@@ -268,6 +272,16 @@ pub trait VRLClient {
             // }
         }
     }
+
+    // async fn streamed_audio_listener(audio_out: Sender<Packet>, socket_addr: SocketAddr) {
+    //     let mut sock = UdpSocket::bind(socket_addr).await.unwrap();
+    //
+    //     loop {
+    //         let data_in = sock.recv_from()
+    //     }
+    //
+    //
+    // }
 
     async fn combined_performer_data_out(&self, mut stream_channel: Receiver<Bytes>, client_socket: SocketAddrV4) {
         'outer: loop {

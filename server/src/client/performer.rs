@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use rosc::OscPacket;
+use rosc::{OscBundle, OscPacket};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::mpsc::Sender;
@@ -15,20 +15,22 @@ use protocol::UserData;
 use crate::client::{ClientChannelData, ClientPorts, VRLClient};
 use crate::client::streaming::braindead_simple_rtp::{RTPSenderOut, SynchronizerData};
 use crate::client::streaming::peer_connection::{register_performer_mocap_data_channel, WebRTPConnection};
-use crate::VRTPPacket;
+use crate::{AudioPacket, VRTPPacket};
 
 pub struct Performer
 {
     user_data: UserData,
     base_channels: ClientChannelData,
     ports: ClientPorts,
-    streaming_connection: Arc<WebRTPConnection>,
+    streaming_connection: Option<Arc<WebRTPConnection>>,
     rtp_stream: Option<Arc<RTPSenderOut<SynchronizerData>>>,
     // webRTC stuff
     signaling_channel: TcpStream,
 
     // internal channels
-    sync_channels: Option<(Receiver<OscPacket>, Receiver<Bytes>)>,
+    /// Channels necessary for the synchronizer.
+    /// These should both be consumed at once.
+    sync_channels: Option<(Receiver<OscBundle>, Receiver<AudioPacket>)>,
 }
 
 const PERFORMER_OFFER: &'static str = "hi1";
@@ -42,6 +44,21 @@ impl Performer {
     // pub async fn new_rtp(
     //     user_data: UserData, base_channels: ClientChannelData, ports: ClientPorts, signaling_channel: TcpStream
     // )
+    
+    pub async fn new_rtp(
+        user_data: UserData, base_channels: ClientChannelData, ports: ClientPorts, signaling_channel: TcpStream,
+        audio_from_sync: Receiver<AudioPacket>, mocap_from_sync: Receiver<OscBundle>
+    ) -> Self {
+        Self {
+            user_data,
+            base_channels,
+            ports,
+            signaling_channel,
+            sync_channels: Some((mocap_from_sync, audio_from_sync)),
+            streaming_connection: None,
+            rtp_stream: None
+        }
+    }
     pub async fn new_rtc(
         user_data: UserData, base_channels: ClientChannelData, ports: ClientPorts, signaling_channel: TcpStream
     ) -> Self {
@@ -67,7 +84,7 @@ impl Performer {
             ports,
             signaling_channel,
             sync_channels: Some((osc_rx, audio_rx)),
-            streaming_connection: Arc::new(incoming),
+            streaming_connection: Some(Arc::new(incoming)),
             rtp_stream: None
         }
     }
@@ -122,7 +139,7 @@ impl Performer {
     //     self.
     // }
 
-    async fn create_incoming_connection(title: &str, osc_to_sync: Sender<OscPacket>, audio_to_sync: Sender<Bytes>) -> anyhow::Result<WebRTPConnection> {
+    async fn create_incoming_connection(title: &str, osc_to_sync: Sender<OscBundle>, audio_to_sync: Sender<AudioPacket>) -> anyhow::Result<WebRTPConnection> {
         let mut conn = WebRTPConnection::new("Performer incoming").await;
         register_performer_mocap_data_channel(&mut conn, osc_to_sync).await?;
 
