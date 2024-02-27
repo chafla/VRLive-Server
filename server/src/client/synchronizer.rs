@@ -1,8 +1,10 @@
 use std::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use bytes::Bytes;
 use log::{debug, error, info, trace, warn};
 use rosc::{OscBundle, OscPacket};
+use rosc::encoder::encode;
 use tokio::sync::mpsc::{Sender, Receiver};
 use tokio::time::Instant;
 use webrtc::rtp::packet::Packet as Packet;
@@ -129,18 +131,31 @@ pub enum SynchronizerPacket {
 
 #[derive(Clone, Debug)]
 pub struct OscData {
-    packet: OscBundle
+    bundle: OscBundle
 }
+
+// impl OscData {
+//     fn as_packet(&mut self) -> &mut OscPacket {
+//         OscPacket::Bundle(self.bundle)
+//     }
+// }
 
 impl From<OscBundle> for OscData {
     fn from(packet: OscBundle) -> Self {
-        Self { packet }
+        Self { bundle: packet }
+    }
+}
+
+impl Into<Bytes> for OscData {
+    fn into(self) -> Bytes {
+        let packet = OscPacket::Bundle(self.bundle);
+        Bytes::from(encode(&packet).unwrap())
     }
 }
 
 impl PartialEq for OscData {
     fn eq(&self, other: &Self) -> bool {
-        self.packet.timetag.eq(&other.packet.timetag)
+        self.bundle.timetag.eq(&other.bundle.timetag)
     }
 }
 
@@ -149,13 +164,13 @@ impl Eq for OscData { }
 
 impl Ord for OscData {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.packet.timetag.cmp(&other.packet.timetag)
+        self.bundle.timetag.cmp(&other.bundle.timetag)
     }
 }
 
 impl PartialOrd for OscData {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.packet.timetag.partial_cmp(&other.packet.timetag)
+        self.bundle.timetag.partial_cmp(&other.bundle.timetag)
     }
 }
 
@@ -237,6 +252,9 @@ impl Synchronizer {
                             let cur_ts = d.header.timestamp as u64;
 
                             trace!("dt: {}", cur_ts - last_audio_timestamp);
+                            if n_audio_packets % 500 == 0 {
+                                audio_duration_ts = 0;  // reset it so we don't stupidly overflow
+                            }
                             audio_duration_ts += (cur_ts - last_audio_timestamp);
                             last_audio_timestamp = d.header.timestamp as u64;
                             n_audio_packets += 1;

@@ -4,7 +4,7 @@ use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use rosc::{encoder, OscPacket};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
@@ -18,6 +18,7 @@ use protocol::osc_messages_out::ServerMessage;
 use protocol::vrl_packet::VRLOSCPacket;
 
 use crate::{AudioPacket, VRTPPacket};
+use crate::client::synchronizer::OscData;
 
 pub mod audience;
 pub mod performer;
@@ -39,7 +40,7 @@ pub struct ClientChannelData {
     /// Pass events from our client to the main server
     pub client_events_in: Sender<ClientMessage>,
     /// Get mocap events to transmit out to our clients
-    pub audience_mocap_out: Option<Receiver<OscPacket>>,
+    pub audience_mocap_out: Option<Receiver<OscData>>,
     /// Get our client event socket from the server
     pub client_event_socket_chan: Option<Receiver<TcpStream>>,
     pub backing_track_socket_chan: Option<Receiver<TcpStream>>,
@@ -138,6 +139,24 @@ pub trait VRLClient {
             });
         }
 
+        // create the UDP senders
+        {
+            let synchronizer_recv = self.channels_mut().from_sync_out_chan.take().unwrap();
+            let mocap_recv = self.channels_mut().audience_mocap_out.take().unwrap();
+            // Send from whatever port, we'll be blasting directly to the client anyway
+            let sync_addr = SocketAddr::new(self.user_data().remote_ip_addr, self.ports().vrtp_port);
+            let mocap_addr = SocketAddr::new(self.user_data().remote_ip_addr, self.ports().audience_mocap_port);
+
+            tokio::spawn(async move {
+                Self::client_transmitter(synchronizer_recv, sync_addr, "Synchronizer to client").await;
+            });
+
+            tokio::spawn(async move {
+                Self::client_transmitter(mocap_recv, mocap_addr, "Audience mocap to client").await;
+            });
+
+        }
+
         {
             let client_event_chan = self.channels().client_events_in.clone();
             let client_sock_chan = self.channels_mut().client_event_socket_chan.take().unwrap();
@@ -150,6 +169,38 @@ pub trait VRLClient {
             tokio::spawn(async move {
                 Self::backing_track_sender(backing_track_sock, backing_track_chan).await
             });
+        }
+    }
+
+    /// Utility transmitter that consumes data from a channel and transmits it out over a UDP socket.
+    async fn client_transmitter<T>(mut incoming_data_chan: Receiver<T>, target_addr: SocketAddr, label: &'static str)
+        where
+            T: Send + Sync + Into<Bytes>
+    {
+        let sock = UdpSocket::bind(SocketAddrV4::new("0.0.0.0".parse().unwrap(), 0)).await.unwrap();
+        info!("Client transmitter for {label} is now active.");
+        let mut sent_once = false;
+        loop {
+            let msg = match incoming_data_chan.recv().await {
+                None => {
+                    error!("Client transmitter for {label}'s send channel appears closed, killing.");
+                    break;
+                },
+                Some(m) => m
+            };
+
+            if !sent_once {
+                sent_once = true;
+                info!("Sent a {label} packet  to {}", &target_addr)
+            }
+
+            debug!("{label} client transmitter sending data out to {}!", &target_addr);
+
+            let msg_bytes = msg.into();
+
+            if let Err(e) = sock.send_to(msg_bytes.as_ref(), target_addr).await {
+                error!("{label} transmitter failed to send: {e}");
+            }
         }
     }
 
@@ -206,7 +257,6 @@ pub trait VRLClient {
     // async fn synchronizer_loop(mocap_in: Receiver<OscPacket>, audio_in: Receiver<Bytes>)
 
     /// Thread handling input for any client events.
-    /// This will become the new "main" thread for the server keeping it alive.
     async fn client_event_listener(stream_title: &'static str, client_events_out: Sender<ClientMessage>, mut client_socket: Receiver<TcpStream>) {
 
         // loop: if we lose connection, we can just have the client give us a new handle.

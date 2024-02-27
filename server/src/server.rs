@@ -6,6 +6,7 @@ use std::fmt::Debug;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::Arc;
+use std::time::{Instant, SystemTime};
 
 use bytes::Bytes;
 use log::{debug, error, info, trace, warn};
@@ -32,6 +33,7 @@ use crate::{MAX_CHAN_SIZE, VRTPPacket};
 use crate::client::{ClientChannelData, ClientPorts, VRLClient};
 use crate::client::audience::AudienceMember;
 use crate::client::performer;
+use crate::client::synchronizer::OscData;
 
 const DEFAULT_CHAN_SIZE: usize = 2048;
 
@@ -161,8 +163,8 @@ pub struct Server {
     server_event_tx: Sender<ServerMessage>,
     server_event_rx: Option<Receiver<ServerMessage>>,
     /// Mocap handlers.
-    general_mocap_tx: Sender<OscPacket>,
-    general_mocap_rx: Option<Receiver<OscPacket>>,
+    general_mocap_tx: Sender<OscData>,
+    general_mocap_rx: Option<Receiver<OscData>>,
 
     /// Backing track handlers
     backing_track_tx: Sender<BackingTrackData>,
@@ -231,12 +233,13 @@ impl <T, U> Listener<T, U>
 }
 
 
-/// Server channels that will not be present on init
+/// Server channels that will not be present on init, and serve the important purpose of being relays between server and
+/// all of the clients in use.
 #[derive(Clone, Debug)]
 struct LateServerChans<T>
     where T: Clone + Debug + PartialEq + Send + Sync
 {
-    mocap_sender: Sender<ListenerMessage<T, OscPacket>>,
+    mocap_sender: Sender<ListenerMessage<T, OscData>>,
     server_event_sender: Sender<ListenerMessage<T, ServerMessage>>,
     sync_sender: Sender<ListenerMessage<T, VRTPPacket>>,
     backing_track_sender: Sender<ListenerMessage<T, BackingTrackData>>
@@ -245,7 +248,7 @@ struct LateServerChans<T>
 impl <T> LateServerChans<T>
     where T: Clone + Debug + PartialEq + Send + Sync + 'static
 {
-    pub async fn subscribe(&self, user_type: &UserType, identifier: T, osc_sender: Sender<OscPacket>, server_event_sender: Sender<ServerMessage>, sync_sender: Sender<VRTPPacket>, backing_track_sender: Sender<BackingTrackData>) -> anyhow::Result<()> {
+    pub async fn subscribe(&self, user_type: &UserType, identifier: T, osc_sender: Sender<OscData>, server_event_sender: Sender<ServerMessage>, sync_sender: Sender<VRTPPacket>, backing_track_sender: Sender<BackingTrackData>) -> anyhow::Result<()> {
         self.mocap_sender.send(ListenerMessage::Subscribe(identifier.clone(), osc_sender)).await?;
         self.server_event_sender.send(ListenerMessage::Subscribe(identifier.clone(), server_event_sender)).await?;
         self.backing_track_sender.send(ListenerMessage::Subscribe(identifier.clone(), backing_track_sender)).await?;
@@ -361,6 +364,10 @@ impl Server {
 
         self.start_audience_mocap_listeners(self.general_mocap_tx.clone()).await;
 
+        // Create our internal handler relays.
+        // As noted elsewhere (perhaps confusingly), these relays function to create broadcast channels from one general input source (the sender side of the listenermessage pair)
+        // which route messages through to their clients (the channels they're given).
+        // This works relatively well will server events.
         // start the synchronizer
         let chan = self.synchronizer_to_out_rx.take().unwrap();
         let sync_chan = self.start_handler::<VRTPPacket, UserIDType>(chan, "synchronizer").await;
@@ -369,7 +376,7 @@ impl Server {
         let event_chan = self.start_handler::<ServerMessage, UserIDType>(chan, "server events").await;
         // and the mocap
         let chan = self.general_mocap_rx.take().unwrap();
-        let mocap_chan = self.start_handler::<OscPacket, UserIDType>(chan, "general (audience) mocap").await;
+        let mocap_chan = self.start_handler::<OscData, UserIDType>(chan, "general (audience) mocap").await;
         // finally, backing tracks
         let chan = self.backing_track_rx.take().unwrap();
         let backing_track_chan = self.start_handler::<BackingTrackData, UserIDType>(chan, "backing track").await;
@@ -398,22 +405,22 @@ impl Server {
         } else {default_ip.parse().unwrap()}
     }
 
-    /// The main function that you'll want to call to start an event.
+    /// The main function that you'll want to call to start up an internal message router.
     pub async fn start_handler<T, U>(&self, event_channel: Receiver<T>, label: &'static str) -> Sender<ListenerMessage<U, T>>
         where
             T: Sync + Send + Debug + Clone + 'static,
             U: Sync + Send + PartialEq + Debug + Clone + 'static
     {
         let (send, recv) = channel(DEFAULT_CHAN_SIZE);
-        // info!("Starting up server internal message router for {label}");
+        info!("Starting up server internal message router for {label}");
         tokio::spawn(async move {
-            Self::server_listener(label, recv, event_channel).await
+            Self::server_relay(label, recv, event_channel).await
         });
 
         send
     }
 
-    async fn start_audience_mocap_listeners(&self, mocap_send: Sender<OscPacket>) {
+    async fn start_audience_mocap_listeners(&self, mocap_send: Sender<OscData>) {
 
         let mocap_in_addr = SocketAddrV4::new("0.0.0.0".parse().unwrap(), self.port_map.audience_mocap_in_port);
         tokio::spawn(async move {
@@ -484,7 +491,7 @@ impl Server {
     /// For example, server events.
     /// On client init, clients will "give" the server a sender to reach their thread that ultimately dispatches server events over their TCP channel.
     /// If the client dies and its channel gets dropped, we astutely handle that and remove them from the list here.
-    async fn server_listener<U, T>(label: &'static str, user_update_channel: Receiver<ListenerMessage<U, T>>, mut main_update_channel: Receiver<T>)
+    async fn server_relay<U, T>(label: &'static str, user_update_channel: Receiver<ListenerMessage<U, T>>, mut main_update_channel: Receiver<T>)
         where
             T: Sync + Send + Debug + Clone,
             U: Sync + Send + PartialEq + Debug + Clone
@@ -505,7 +512,7 @@ impl Server {
                         break
                     },  // again, our upstream closed
                     Some(d) => {
-                        info!("Internal server listener got data for {label}");
+                        trace!("Internal server listener got data for {label}");
                         for (id, chan) in &mut listener.client_channels {
                             if chan.send(d.clone()).await.is_err() {
                                 // hang onto the IDs that don't have active channels: these clients have probably been dropped
@@ -639,7 +646,7 @@ impl Server {
     /// Take in motion capture from audience members and sent it out as soon as we can.
     /// Audience members don't really need to worry about sending to specific "clients",
     /// instead they can just forward their data on here, and it will be repeated to any audience members listening.
-    async fn audience_mocap_listener(socket_addr: &SocketAddrV4, listener_channel: Sender<OscPacket>) {
+    async fn audience_mocap_listener(socket_addr: &SocketAddrV4, listener_channel: Sender<OscData>) {
         // https://github.com/henninglive/tokio-udp-multicast-chat/blob/master/src/main.rs
 
         // assert!(multicast_socket_addr.ip().is_multicast(), "Must be multcast address");
@@ -662,17 +669,23 @@ impl Server {
             // just forward the raw packets, do as little processing as possible
             let datagram_data = &listener_buf[0..bytes_read];
 
-            let (_, pkt) = match decoder::decode_udp(datagram_data) {
+            let pkt = match decoder::decode_udp(datagram_data) {
                 Err(e) => {
                     error!("Audience mocap listener received something that doesn't seem to be OSC: {e}");
                     continue;
                 },
-                Ok(r) => r
+                Ok((_, OscPacket::Message(msg))) => {
+                    warn!("Mocap listener expected bundle got message {msg:?}");
+                    continue;
+                },
+                Ok((_, OscPacket::Bundle(b))) => b
             };
 
             // debug!("Echoing audience mocap!");
 
-            let _ = listener_channel.send(pkt).await;
+            let osc_data = OscData::from(pkt);
+
+            let _ = listener_channel.send(osc_data).await;
         }
     }
 
@@ -754,7 +767,7 @@ impl Server {
 
         let (backing_track_send, backing_track_recv) = mpsc::channel::<BackingTrackData>(MAX_CHAN_SIZE);
         let (server_event_out_send, server_event_out_recv) = mpsc::channel::<ServerMessage>(MAX_CHAN_SIZE);
-        let (audience_mocap_out_send, audience_mocap_out_recv) = mpsc::channel::<OscPacket>(MAX_CHAN_SIZE);
+        let (audience_mocap_out_send, audience_mocap_out_recv) = mpsc::channel::<OscData>(MAX_CHAN_SIZE);
         let (out_from_sync_tx, out_from_sync_rx) = mpsc::channel::<VRTPPacket>(MAX_CHAN_SIZE);
 
         let (client_event_socket_out, client_event_socket_in) = mpsc::channel::<TcpStream>(MAX_CHAN_SIZE);
@@ -893,6 +906,7 @@ impl Server {
         let sock = UdpSocket::bind(listening_addr).await?;
         // let mut bytes_in;
         let mut listener_buf: [u8; LISTENER_BUF_SIZE];// = [0; LISTENER_BUF_SIZE];
+        let mut last_notice = Instant::now();
         loop {
             // bytes_in = bytes::BytesMut::with_capacity(4096);
             listener_buf = [0; LISTENER_BUF_SIZE];
@@ -917,7 +931,11 @@ impl Server {
             // dbg!(&users_by_ip.read().await);
             let performer_listener = match users_by_ip.read().await.get(&incoming_addr.ip().to_string()) {
                 None => {
-                    warn!("Got performer mocap data from someone who we haven't handshaked with!");
+                    if (Instant::now() - last_notice).as_secs() > 5 {
+                        trace!("Got performer mocap data from someone who we haven't handshaked with!");
+                        last_notice = Instant::now();
+                    }
+
                     continue;
                 }
                 Some(data) => {
@@ -955,12 +973,7 @@ impl Server {
         }
     }
 
-
-
-
-
-
-        async fn performer_audio_listener(
+    async fn performer_audio_listener(
         listening_addr: &SocketAddrV4, users_by_ip: Arc<RwLock<HashMap<String, ServerUserData>>>,
     ) -> io::Result<()> {
         info!("Listening for performer audio on {listening_addr}");
@@ -968,6 +981,7 @@ impl Server {
         let sock = UdpSocket::bind(listening_addr).await?;
         // let mut bytes_in;
         let mut listener_buf : [u8; LISTENER_BUF_SIZE];// = [0; LISTENER_BUF_SIZE];
+        let mut last_notice = Instant::now();
         loop {
             // bytes_in = bytes::BytesMut::with_capacity(4096);
             listener_buf = [0; LISTENER_BUF_SIZE];
@@ -992,7 +1006,10 @@ impl Server {
             // dbg!(&users_by_ip.read().await);
             let performer_listener = match users_by_ip.read().await.get(&incoming_addr.ip().to_string()) {
                 None => {
-                    warn!("Got performer audio data from someone who we haven't handshaked with!");
+                    if (Instant::now() - last_notice).as_secs() > 5 {
+                        trace!("Got performer mocap data from someone who we haven't handshaked with!");
+                        last_notice = Instant::now();
+                    }
                     continue;
                 }
                 Some(data) => {
