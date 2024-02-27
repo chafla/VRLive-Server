@@ -6,9 +6,8 @@ use std::fmt::Debug;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::Arc;
-use std::time::{Instant, SystemTime};
+use std::time::Instant;
 
-use bytes::Bytes;
 use log::{debug, error, info, trace, warn};
 use rosc::{decoder, OscBundle, OscPacket};
 use rustyline_async;

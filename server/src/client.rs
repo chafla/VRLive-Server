@@ -9,7 +9,6 @@ use rosc::{encoder, OscPacket};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::mpsc::{Receiver, Sender};
-use webrtc::rtp::packet::Packet;
 
 use protocol::{OSCDecodable, OSCEncodable, UserData};
 use protocol::backing_track::BackingTrackData;
