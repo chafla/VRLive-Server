@@ -244,7 +244,12 @@ pub trait VRLClient {
                     Ok(_) => {
                         debug!("Sent a packet {0:?}", &packet);
                     }
-                    Err(e) => warn!("Failed to send packet: {e}")
+                    Err(e) => {
+                        warn!("Failed to send packet: {e}");
+                        // if we fail sending, we'll just have to mark this as terminated.
+                        // loop back around to try for another listener.
+                        continue 'outer;
+                    }
                 }
             }
         }
@@ -334,29 +339,29 @@ pub trait VRLClient {
     //
     // }
 
-    async fn combined_performer_data_out(&self, mut stream_channel: Receiver<Bytes>, client_socket: SocketAddrV4) {
-        'outer: loop {
-            // we really don't care what things look like on the receiving end
-            // all that we care about is blasting a ton of UDP packets at them as quickly as possible
-
-        }
-    }
-
-    async fn synchronized_data_sender(mut synchronized_data_out: Receiver<VRTPPacket>) {
-        debug!("Synchronized data sender is up and ready!");
-        loop {
-            let incoming_message = match synchronized_data_out.recv().await {
-                None => {
-                    warn!("Synchronized data sender is shutting down!");
-                    break;
-                },
-                Some(VRTPPacket::Encoded(b)) => b,
-                Some(raw@VRTPPacket::Raw(_, _)) => raw.into()
-            };
-            // todo stuff
-        }
-        // TODO process this data before it's sent
-    }
+    // async fn combined_performer_data_out(&self, mut stream_channel: Receiver<Bytes>, client_socket: SocketAddrV4) {
+    //     'outer: loop {
+    //         // we really don't care what things look like on the receiving end
+    //         // all that we care about is blasting a ton of UDP packets at them as quickly as possible
+    //
+    //     }
+    // }
+    //
+    // async fn synchronized_data_sender(mut synchronized_data_out: Receiver<VRTPPacket>) {
+    //     debug!("Synchronized data sender is up and ready!");
+    //     loop {
+    //         let incoming_message = match synchronized_data_out.recv().await {
+    //             None => {
+    //                 warn!("Synchronized data sender is shutting down!");
+    //                 break;
+    //             },
+    //             Some(VRTPPacket::Encoded(b)) => b,
+    //             Some(raw@VRTPPacket::Raw(_, _)) => raw.into()
+    //         };
+    //         // todo stuff
+    //     }
+    //     // TODO process this data before it's sent
+    // }
 
     /// Thread responsible for updating the backing track as needed.
     async fn backing_track_sender(mut sock_channel: Receiver<TcpStream>, mut backing_track_stream: Receiver<BackingTrackData>) {

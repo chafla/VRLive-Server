@@ -313,7 +313,8 @@ impl Server {
 
     pub async fn main_server_loop(&mut self) {
 
-        let (mut readline, mut shared_writer) = Readline::new("> ".into()).unwrap();
+        // ensure the writer doesn't get dropped
+        let (mut readline, _writer) = Readline::new("> ".into()).unwrap();
         loop {
             let line = match readline.readline().await {
                 Err(e) => {
@@ -331,15 +332,24 @@ impl Server {
 
             match (start, rest) {
                 ("backing", Some(path)) => {
+                    let path = if path == "default" {"C:\\Users\\namen\\Music\\howd_i_wind_up_here.mp3"} else {path};
                     match BackingTrackData::open(path).await {
                         Err(e) => {
                             error!("Failed to load backing track at {path}: {e}");
                         }
-                        Ok(data) => self.backing_track_tx.send(data).await.unwrap()
+                        Ok(data) => {
+                            info!("Sending backing track to client(s)");
+                            self.backing_track_tx.send(data).await.unwrap()
+                        }
+                    }
+                },
+                ("message", Some(msg)) => {
+                    match msg {
+                        "ready" => self.server_event_tx.send(ServerMessage::Performer(PerformerServerMessage::Ready(true))).await.unwrap(),
+                        _ => warn!("Unknown server message '{msg}'"),
                     }
 
-
-                },
+                }
                 _ => (),
             }
 
@@ -593,14 +603,6 @@ impl Server {
                     }
 
                     let (user_id, server_data) = res.unwrap();
-
-
-                    {
-                        server_event_sender_inner.send(ServerMessage::Performer(PerformerServerMessage::Ready(true))).await;
-                        // sample messages!
-                        // self.dispatch_server_event()
-                        // let _ = server_data.server_event_update_send.send(ServerMessage::Performer(PerformerServerMessage::Ready(true))).await;
-                    }
 
                     let mut write_handle = clients_local.write().await;
                     write_handle.insert(user_id, server_data.clone());
