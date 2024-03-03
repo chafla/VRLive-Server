@@ -109,9 +109,9 @@ impl Default for ServerPortMap {
             new_connections: 5653,
             performer_mocap_in: 5654,
             performer_audio_in: 5655,
-            client_event_conn_port: 5655,
-            backing_track_conn_port: 5656,
-            server_event_conn_port: 5657,
+            client_event_conn_port: 5656,
+            backing_track_conn_port: 5657,
+            server_event_conn_port: 5658,
             audience_mocap_in: 9000,
         }
     }

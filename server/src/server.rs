@@ -70,6 +70,8 @@ pub struct ServerUserData {
     backing_track_socket_send: Sender<TcpStream>,
     /// Send a connected socket on this channel when a new server event channel is established.
     server_event_socket_send: Sender<TcpStream>,
+    /// Send a connected socket on this channel when a new heartbeat channel is established.
+    heartbeat_socket_send: Sender<TcpStream>,
 }
 
 
@@ -87,6 +89,8 @@ pub struct ServerThreadData {
     client_events_in_tx: Sender<ClientMessage>,
     /// The current minimum user ID.
     cur_user_id: Arc<Mutex<UserIDType>>,
+    /// Current set of users.
+    all_users: Arc<RwLock<HashMap<String, ServerUserData>>>,
     extra_ports: Arc<HashMap<String, u16>>,
 }
 
@@ -106,7 +110,7 @@ pub struct Server {
 
     // These channels are here because they need to be cloned by all new clients as common channels.
     /// Output channel coming from each synchronizer and going to the high-priority output thread.
-    synchronizer_to_out_tx: Sender<VRTPPacket>, // TODO add the type here
+    synchronizer_to_out_tx: Sender<VRTPPacket>,
     /// Hidden internal channel that receives the message inside the output thread
     synchronizer_to_out_rx: Option<Receiver<VRTPPacket>>,
 
@@ -149,6 +153,11 @@ pub enum ListenerMessage <U, T>
     /// A message of this kind indicates that the user should be unsubscribed from the channel, and their listener should
     /// not be sent to anymore.
     Unsubscribe(U)
+}
+
+pub enum HandshakeResult {
+    NewConnection(UserIDType, ServerUserData),
+    Reconnection(UserIDType)
 }
 
 /// A thread-local struct useful for managing large amounts of listeners without needing to refer to some external, mutexed data structure.
@@ -207,7 +216,7 @@ struct ServerRelayChannels<T>
     mocap_sender: Sender<ListenerMessage<T, OscData>>,
     server_event_sender: Sender<ListenerMessage<T, ServerMessage>>,
     sync_sender: Sender<ListenerMessage<T, VRTPPacket>>,
-    backing_track_sender: Sender<ListenerMessage<T, BackingTrackData>>
+    backing_track_sender: Sender<ListenerMessage<T, BackingTrackData>>,
 }
 
 impl <T> ServerRelayChannels<T>
@@ -321,8 +330,6 @@ impl Server {
                 }
                 _ => (),
             }
-
-            // TODO
         }
 
         warn!("Execution was interrupted by user!")
@@ -549,25 +556,37 @@ impl Server {
 
                 info!("Got a new connection from {incoming_addr}");
 
-                // perform the handshake synchronously, so we don't have to worry about crossing streams?
-                // TODO add the ability for multiple streams at once
-
                 tokio::spawn(async move {
+                    // if let Some(v) = clients_by_ip_local.read().await.get(&incoming_addr.ip().to_string()) {
+                    //     // this looks like a reconnection.
+                    //     // TODO purge serveruserdata on a disconnection so it forces a full reconnect when they choose to disconnect
+                    //     Self::handle_reconnect(v).await;
+                    //     info!("{incoming_addr} has reconnected.");
+                    //     return;
+                    // }
                     let chans = Arc::clone(&late_channels_outer);
                     let res = Self::perform_handshake(socket, incoming_addr, thread_data, chans).await;
 
-                    if let Err(msg) = res {
-                        error!("Attempted handshake with {0} failed: {msg}", incoming_addr);
-                        return
+                    match res {
+                        Err(e) => {
+                            error!("Attempted handshake with {0} failed: {e}", incoming_addr);
+                            return
+                        },
+                        Ok(HandshakeResult::NewConnection(user_id, server_data)) => {
+                            let mut write_handle = clients_local.write().await;
+                            write_handle.insert(user_id, server_data.clone());
+
+                            let mut write_handle = clients_by_ip_local.write().await;
+                            write_handle.insert(server_data.base_user_data.remote_ip_addr.to_string(), server_data);
+                        },
+                        Ok(HandshakeResult::Reconnection(user_id)) => {
+                            info!("User {user_id} has reconnected!");
+                        },
+
                     }
 
-                    let (user_id, server_data) = res.unwrap();
 
-                    let mut write_handle = clients_local.write().await;
-                    write_handle.insert(user_id, server_data.clone());
 
-                    let mut write_handle = clients_by_ip_local.write().await;
-                    write_handle.insert(server_data.base_user_data.remote_ip_addr.to_string(), server_data);
                 });
             }
         });
@@ -655,19 +674,42 @@ impl Server {
         }
     }
 
+    async fn handle_reconnect(server_data: &ServerUserData, user_data: &UserData) {
+        // user_data.
+
+    }
+
 
     /// Perform the handshake. If this completes, it should add a new client.
     /// If this also succeeds, then it should spin up the necessary threads for listening
-    async fn perform_handshake(mut socket: TcpStream, addr: SocketAddr, server_thread_data: ServerThreadData, registration_channels: Arc<ServerRelayChannels<UserIDType>>) -> Result<(UserIDType, ServerUserData), String> {
+    async fn perform_handshake(mut socket: TcpStream, addr: SocketAddr, server_thread_data: ServerThreadData, registration_channels: Arc<ServerRelayChannels<UserIDType>>) -> Result<HandshakeResult, String> {
         let our_user_id;
+        let existing_user;
         let mut handshake_buf: [u8; HANDSHAKE_BUF_SIZE] = [0; HANDSHAKE_BUF_SIZE];
+
+        // check to see if this is reconnected.
+        {
+            // scope block so we drop this lock when we're done.
+            let lock = server_thread_data.all_users.read().await;
+            let existing_user_data = lock.get(&addr.ip().to_string());
+            match existing_user_data {
+                Some(data) => {
+                    // if they're reconnecting, use their same ID to get everything lined up as it should be.
+                    our_user_id = data.base_user_data.participant_id;
+                    existing_user = true;
+                },
+                None => {
+                    let mut user_id = server_thread_data.cur_user_id.lock().await;
+                    *user_id += 1;
+                    our_user_id = *user_id;
+                    existing_user = false;
+                }
+            };
+        }
+
         // lock the user ID and increment it
         // if we don't complete the handshake it's okay, we will just need this ID when we're done
-        {
-            let mut user_id = server_thread_data.cur_user_id.lock().await;
-            *user_id += 1;
-            our_user_id = *user_id;
-        }
+
         let handshake_start = HandshakeAck::new(our_user_id, server_thread_data.host, None);
 
         let handshake_start_msg = serde_json::to_string(&handshake_start).unwrap();
@@ -717,25 +759,31 @@ impl Server {
             fancy_title: synack.own_identifier
         };
 
-        // let ports = ClientPorts::new(
-        //     synack.server_event_port,
-        //     synack.backing_track_port,
-        //     synack.vrtp_mocap_port,
-        //     synack.audience_motion_capture_port,
-        //     Some(synack.extra_ports),
-        // );
+        // for reconnections, we still want to allow the handshake to complete.
+        // we just don't want to have to re-create our existing data structures.
 
-        let (backing_track_send, backing_track_recv) = mpsc::channel::<BackingTrackData>(MAX_CHAN_SIZE);
-        let (server_event_out_send, server_event_out_recv) = mpsc::channel::<ServerMessage>(MAX_CHAN_SIZE);
-        let (audience_mocap_out_send, audience_mocap_out_recv) = mpsc::channel::<OscData>(MAX_CHAN_SIZE);
-        let (out_from_sync_tx, out_from_sync_rx) = mpsc::channel::<VRTPPacket>(MAX_CHAN_SIZE);
+        if existing_user {
+            return Ok(HandshakeResult::Reconnection(our_user_id));
+        }
 
-        let (client_event_socket_out, client_event_socket_in) = mpsc::channel::<TcpStream>(MAX_CHAN_SIZE);
-        let (backing_track_socket_tx, backing_track_socket_rx) = mpsc::channel::<TcpStream>(MAX_CHAN_SIZE);
-        let (server_event_socket_out, server_event_socket_in) = mpsc::channel::<TcpStream>(MAX_CHAN_SIZE);
 
-        let (performer_audio_tx, performer_audio_rx) = mpsc::channel(MAX_CHAN_SIZE);
-        let (performer_mocap_tx, performer_mocap_rx) = mpsc::channel(MAX_CHAN_SIZE);
+
+
+
+
+        let (backing_track_send, backing_track_recv) = channel::<BackingTrackData>(MAX_CHAN_SIZE);
+        let (server_event_out_send, server_event_out_recv) = channel::<ServerMessage>(MAX_CHAN_SIZE);
+        let (audience_mocap_out_send, audience_mocap_out_recv) = channel::<OscData>(MAX_CHAN_SIZE);
+        let (out_from_sync_tx, out_from_sync_rx) = channel::<VRTPPacket>(MAX_CHAN_SIZE);
+
+        let (client_event_socket_out, client_event_socket_in) = channel::<TcpStream>(MAX_CHAN_SIZE);
+        let (backing_track_socket_tx, backing_track_socket_rx) = channel::<TcpStream>(MAX_CHAN_SIZE);
+        let (server_event_socket_out, server_event_socket_in) = channel::<TcpStream>(MAX_CHAN_SIZE);
+        let (heartbeat_socket_out, heartbeat_socket_in) = channel::<TcpStream>(MAX_CHAN_SIZE);
+
+        let (performer_audio_tx, performer_audio_rx) = channel(MAX_CHAN_SIZE);
+        let (performer_mocap_tx, performer_mocap_rx) = channel(MAX_CHAN_SIZE);
+
 
         // let ServerUserData
         let server_user_data = ServerUserData {
@@ -750,6 +798,7 @@ impl Server {
             client_event_socket_send: client_event_socket_out,
             backing_track_socket_send: backing_track_socket_tx,
             server_event_socket_send: server_event_socket_out,
+            heartbeat_socket_send: heartbeat_socket_out,
             performer_audio_sender: performer_audio_tx,
             performer_mocap_sender: performer_mocap_tx
         };
@@ -764,6 +813,7 @@ impl Server {
             client_event_socket_chan: Some(client_event_socket_in),
             backing_track_socket_chan: Some(backing_track_socket_rx),
             server_event_socket_chan: Some(server_event_socket_in),
+            heartbeat_socket_chan: Some(heartbeat_socket_in),
             audience_mocap_out: Some(audience_mocap_out_recv),
             from_sync_out_chan: Some(out_from_sync_rx),
             synchronizer_osc_in: None,
@@ -771,10 +821,6 @@ impl Server {
             synchronizer_vrtp_out: Some(server_thread_data.synchronizer_to_out_tx.clone()),
 
         };
-        // client_channel_data.synchronizer_vrtp_out =
-
-
-
 
         let server_user_data_inner = server_user_data.clone();
         // pass off the client to handle themselves
@@ -804,8 +850,8 @@ impl Server {
             };
         });
 
+        // Register the server listeners
         registration_channels.subscribe(&server_user_data.user_type, our_user_id.clone(), audience_mocap_out_send, server_event_out_send, out_from_sync_tx, backing_track_send).await.unwrap();
-        // registration_channels.server_event_sender.send(ListenerMessage::Subscribe(our_user_id, server_event_out_send)).await.unwrap();
 
         // from here on out, it's up to the client to fill things out.
 
@@ -821,7 +867,7 @@ impl Server {
                 UserType::Performer => "a performer"
             }
         );
-        Ok((our_user_id, server_user_data))
+        Ok(HandshakeResult::NewConnection(our_user_id, server_user_data))
 
     }
 
@@ -1012,6 +1058,7 @@ impl Server {
             client_events_in_tx: self.client_event_in_tx.clone(),
             cur_user_id: Arc::clone(&self.cur_user_id),
             extra_ports: self.extra_ports.clone(),
+            all_users: Arc::clone(&self.clients_by_ip),
 
         }
     }

@@ -8,6 +8,8 @@ pub mod vrl_packet;
 pub mod osc_messages_out;
 pub mod handshake;
 pub mod backing_track;
+pub mod heartbeat;
+
 pub type UserIDType = u16;
 
 
@@ -42,7 +44,7 @@ pub struct AudienceChannels {
 }
 
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UserData {
     pub participant_id: UserIDType, // you better not have this many people
     pub fancy_title: String,
