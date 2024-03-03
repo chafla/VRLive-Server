@@ -27,12 +27,14 @@ use protocol::handshake::{HandshakeAck, HandshakeCompletion, HandshakeSynAck, Se
 use protocol::osc_messages_in::ClientMessage;
 use protocol::osc_messages_out::PerformerServerMessage;
 use protocol::UserType;
+use protocol::vrl_packet::{OscData, VRTPPacket};
 
-use crate::{MAX_CHAN_SIZE, VRTPPacket};
 use crate::client::{ClientChannelData, VRLClient};
 use crate::client::audience::AudienceMember;
 use crate::client::performer;
-use crate::client::synchronizer::OscData;
+use crate::MAX_CHAN_SIZE;
+
+// use crate::client::synchronizer::OscData;
 
 const DEFAULT_CHAN_SIZE: usize = 2048;
 
@@ -816,8 +818,6 @@ impl Server {
             heartbeat_socket_chan: Some(heartbeat_socket_in),
             audience_mocap_out: Some(audience_mocap_out_recv),
             from_sync_out_chan: Some(out_from_sync_rx),
-            synchronizer_osc_in: None,
-            synchronizer_audio_in: None,
             synchronizer_vrtp_out: Some(server_thread_data.synchronizer_to_out_tx.clone()),
 
         };

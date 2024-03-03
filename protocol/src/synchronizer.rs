@@ -1,130 +1,16 @@
-use std::cmp::{Ordering, Reverse};
+use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::time::SystemTime;
 
-use bytes::Bytes;
 use log::{error, info, trace, warn};
-use rosc::{OscBundle, OscPacket};
-use rosc::encoder::encode;
+use rosc::OscBundle;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::Instant;
 use webrtc::rtp::packet::Packet as Packet;
 
-use crate::VRTPPacket;
+use crate::vrl_packet::{OscData, RTPPacket, RTPStreamInfo, VRTPPacket};
 
-/// Metadata about the current RTP stream.
-#[derive(Copy, Clone, Debug)]
-pub struct RTPStreamInfo {
-    /// Timestamps for RTP headers can have a random start, so this stores t=0.
-    /// This should be in unix time
-    zero_time: u32,
-    /// Clock rates are variable as well. Should give us a good safe conversion factor
-    clock_rate: f32
-}
-
-
-impl RTPStreamInfo {
-    pub fn new(unix_time_ns: u32, clock_rate: f32) -> Self {
-        Self {
-            zero_time: unix_time_ns,
-            clock_rate
-        }
-    }
-}
-
-/// Wrapper for an RTP packet, used to apply sorting traits
-#[derive(Clone, Debug)]
-pub struct RTPPacket {
-    /// The actual packet that we're working with
-    packet: Packet,
-    /// Some metadata about the stream in general
-    meta: RTPStreamInfo
-}
-
-impl RTPPacket {
-    pub fn new(packet: Packet, meta: RTPStreamInfo) -> Self {
-        Self {
-            packet,
-            meta
-        }
-    }
-
-    /// Raw timestamp since zero time
-    pub fn raw_timestamp(&self) -> u32 {
-        self.packet.header.timestamp + self.meta.zero_time
-    }
-}
-
-impl PartialEq for RTPPacket {
-    fn eq(&self, other: &Self) -> bool {
-        self.packet.header.timestamp == other.packet.header.timestamp
-    }
-}
-
-impl Eq for RTPPacket {}
-
-impl PartialOrd for RTPPacket {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.packet.header.timestamp.partial_cmp(&other.packet.header.timestamp)
-    }
-}
-
-impl Ord for RTPPacket {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.packet.header.timestamp.cmp(&other.packet.header.timestamp)
-    }
-}
-
-
-/// Outer wrapper for organizing data emerging from the synchronizer
-#[derive(Clone, Debug)]
-pub enum SynchronizerPacket {
-    Mocap(OscData),
-    /// An RTP packet
-    Audio(RTPPacket)
-}
-
-/// Wrapper for an OSC bundle.
-/// Used to apply a sort-order to them based on timestamps.
-#[derive(Clone, Debug)]
-pub struct OscData {
-    bundle: OscBundle
-}
-
-
-impl From<OscBundle> for OscData {
-    fn from(packet: OscBundle) -> Self {
-        Self { bundle: packet }
-    }
-}
-
-impl Into<Bytes> for OscData {
-    fn into(self) -> Bytes {
-        let packet = OscPacket::Bundle(self.bundle);
-        Bytes::from(encode(&packet).unwrap())
-    }
-}
-
-impl PartialEq for OscData {
-    fn eq(&self, other: &Self) -> bool {
-        self.bundle.timetag.eq(&other.bundle.timetag)
-    }
-}
-
-// default
-impl Eq for OscData { }
-
-impl Ord for OscData {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.bundle.timetag.cmp(&other.bundle.timetag)
-    }
-}
-
-impl PartialOrd for OscData {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.bundle.timetag.partial_cmp(&other.bundle.timetag)
-    }
-}
+// use crate::VRTPPacket;
 
 pub struct Synchronizer {
     /// The channel used to send combined data out to the main server

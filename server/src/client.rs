@@ -1,8 +1,7 @@
-use std::io;
 use std::net::{SocketAddr, SocketAddrV4};
 
 use async_trait::async_trait;
-use bytes::{Buf, Bytes};
+use bytes::{Bytes};
 use log::{debug, error, info, trace, warn};
 use rosc::{encoder, OscPacket};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -16,15 +15,15 @@ use protocol::heartbeat::HeartbeatStatus;
 use protocol::heartbeat::HeartbeatStatus::Hangup;
 use protocol::osc_messages_in::ClientMessage;
 use protocol::osc_messages_out::ServerMessage;
-use protocol::vrl_packet::VRLOSCPacket;
+use protocol::vrl_packet::{OscData, VRTPPacket};
 
-use crate::{AudioPacket, VRTPPacket};
-use crate::client::synchronizer::OscData;
+// use crate::client::synchronizer::OscData;
+// use protocol::syn
 
 pub mod audience;
 pub mod performer;
 mod streaming;
-pub mod synchronizer;
+// pub mod synchronizer;
 
 
 /// Client-specific channel data.
@@ -57,9 +56,9 @@ pub struct ClientChannelData {
 
     // Performer clients manage their own synchronizer threads.
     // This means that they may exist, or may not if we're an audience member.
-    pub synchronizer_osc_in: Option<Receiver<VRLOSCPacket>>,
-    pub synchronizer_audio_in: Option<Receiver<AudioPacket>>,
-    /// This channel is for performers to pass their own VRTP data onto the server dispatch thread.
+    // pub synchronizer_osc_in: Option<Receiver<VRLOSCPacket>>,
+    // pub synchronizer_audio_in: Option<Receiver<AudioPacket>>,
+    // This channel is for performers to pass their own VRTP data onto the server dispatch thread.
     pub synchronizer_vrtp_out: Option<Sender<VRTPPacket>>,
 }
 
@@ -140,7 +139,7 @@ pub trait VRLClient {
     /// Utility transmitter that consumes data from a channel and transmits it out over a UDP socket.
     async fn client_transmitter<T>(mut incoming_data_chan: Receiver<T>, target_addr: SocketAddr, label: &'static str)
         where
-            T: Send + Sync + Into<Bytes>
+            T: Send + Sync + TryInto<Bytes>
     {
         let sock = UdpSocket::bind(SocketAddrV4::new("0.0.0.0".parse().unwrap(), 0)).await.unwrap();
         info!("Client transmitter for {label} is now active.");
@@ -161,7 +160,13 @@ pub trait VRLClient {
 
             debug!("{label} client transmitter sending data out to {}!", &target_addr);
 
-            let msg_bytes = msg.into();
+            let msg_bytes = match msg.try_into() {
+                Ok(b) => b,
+                Err(_) => {
+                    error!("{label} failed to convert data into packet for output.");
+                    continue;
+                }
+            };
 
             if let Err(e) = sock.send_to(msg_bytes.as_ref(), target_addr).await {
                 error!("{label} transmitter failed to send: {e}");

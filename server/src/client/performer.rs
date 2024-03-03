@@ -8,15 +8,15 @@ use webrtc::api::media_engine::MIME_TYPE_OPUS;
 use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
 use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
 use webrtc::track::track_local::TrackLocal;
-use protocol::handshake::ClientPortMap;
 
+use protocol::handshake::ClientPortMap;
+use protocol::synchronizer::Synchronizer;
 use protocol::UserData;
 
-use crate::{AudioPacket, VRTPPacket};
+use crate::AudioPacket;
 use crate::client::{ClientChannelData, VRLClient};
 use crate::client::streaming::braindead_simple_rtp::{RTPSenderOut, SynchronizerData};
 use crate::client::streaming::peer_connection::{register_performer_mocap_data_channel, WebRTPConnection};
-use crate::client::synchronizer::Synchronizer;
 
 const CLOCK_RATE: f32 = 48000.0;
 
@@ -168,12 +168,12 @@ impl Performer {
         Ok(conn)
     }
 
-    async fn create_outgoing_connection(title: &str, sync_to_out: Sender<VRTPPacket>) -> anyhow::Result<WebRTPConnection> {
-        let mut conn = WebRTPConnection::new("Performer out").await;
-        todo!();
-        Ok(conn)
-
-    }
+    // async fn create_outgoing_connection(title: &str, sync_to_out: Sender<VRTPPacket>) -> anyhow::Result<WebRTPConnection> {
+    //     let mut conn = WebRTPConnection::new("Performer out").await;
+    //     todo!();
+    //     Ok(conn)
+    //
+    // }
 }
 
 impl VRLClient for Performer {

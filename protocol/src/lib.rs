@@ -9,6 +9,7 @@ pub mod osc_messages_out;
 pub mod handshake;
 pub mod backing_track;
 pub mod heartbeat;
+pub mod synchronizer;
 
 pub type UserIDType = u16;
 
