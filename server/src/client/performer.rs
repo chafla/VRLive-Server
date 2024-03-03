@@ -8,11 +8,12 @@ use webrtc::api::media_engine::MIME_TYPE_OPUS;
 use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
 use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
 use webrtc::track::track_local::TrackLocal;
+use protocol::handshake::ClientPortMap;
 
 use protocol::UserData;
 
 use crate::{AudioPacket, VRTPPacket};
-use crate::client::{ClientChannelData, ClientPorts, VRLClient};
+use crate::client::{ClientChannelData, VRLClient};
 use crate::client::streaming::braindead_simple_rtp::{RTPSenderOut, SynchronizerData};
 use crate::client::streaming::peer_connection::{register_performer_mocap_data_channel, WebRTPConnection};
 use crate::client::synchronizer::Synchronizer;
@@ -23,7 +24,7 @@ pub struct Performer
 {
     user_data: UserData,
     base_channels: ClientChannelData,
-    ports: ClientPorts,
+    ports: ClientPortMap,
     streaming_connection: Option<Arc<WebRTPConnection>>,
     rtp_stream: Option<Arc<RTPSenderOut<SynchronizerData>>>,
     // webRTC stuff
@@ -50,7 +51,7 @@ impl Performer {
     // )
 
     pub async fn new_rtp(
-        user_data: UserData, mut base_channels: ClientChannelData, ports: ClientPorts, signaling_channel: TcpStream,
+        user_data: UserData, mut base_channels: ClientChannelData, ports: ClientPortMap, signaling_channel: TcpStream,
         audio_to_sync: Receiver<AudioPacket>, mocap_to_sync: Receiver<OscBundle>
     ) -> Self {
 
@@ -73,7 +74,7 @@ impl Performer {
         }
     }
     pub async fn new_rtc(
-        user_data: UserData, base_channels: ClientChannelData, ports: ClientPorts, signaling_channel: TcpStream
+        user_data: UserData, base_channels: ClientChannelData, ports: ClientPortMap, signaling_channel: TcpStream
     ) -> Self {
 
         let (osc_tx, osc_rx) = tokio::sync::mpsc::channel(2048);
@@ -139,7 +140,7 @@ impl Performer {
                 (_, _) => todo!()
             }
 
-            Box::pin(async move {})
+            // Box::pin(async move {})
 
         }));
     }
@@ -176,7 +177,7 @@ impl Performer {
 }
 
 impl VRLClient for Performer {
-    fn ports(&self) -> &ClientPorts {
+    fn ports(&self) -> &ClientPortMap {
         &self.ports
     }
 

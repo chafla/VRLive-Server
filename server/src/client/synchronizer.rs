@@ -14,7 +14,7 @@ use crate::VRTPPacket;
 
 /// Metadata about the current RTP stream.
 #[derive(Copy, Clone, Debug)]
-pub struct RTPMeta {
+pub struct RTPStreamInfo {
     /// Timestamps for RTP headers can have a random start, so this stores t=0.
     /// This should be in unix time
     zero_time: u32,
@@ -23,7 +23,7 @@ pub struct RTPMeta {
 }
 
 
-impl RTPMeta {
+impl RTPStreamInfo {
     pub fn new(unix_time_ns: u32, clock_rate: f32) -> Self {
         Self {
             zero_time: unix_time_ns,
@@ -32,14 +32,17 @@ impl RTPMeta {
     }
 }
 
+/// Wrapper for an RTP packet, used to apply sorting traits
 #[derive(Clone, Debug)]
 pub struct RTPPacket {
+    /// The actual packet that we're working with
     packet: Packet,
-    meta: RTPMeta
+    /// Some metadata about the stream in general
+    meta: RTPStreamInfo
 }
 
 impl RTPPacket {
-    pub fn new(packet: Packet, meta: RTPMeta) -> Self {
+    pub fn new(packet: Packet, meta: RTPStreamInfo) -> Self {
         Self {
             packet,
             meta
@@ -73,74 +76,21 @@ impl Ord for RTPPacket {
 }
 
 
+/// Outer wrapper for organizing data emerging from the synchronizer
 #[derive(Clone, Debug)]
 pub enum SynchronizerPacket {
     Mocap(OscData),
-    /// An RTP packet, storing both its initial timestamp a
+    /// An RTP packet
     Audio(RTPPacket)
 }
-//
-// impl SynchronizerPacket {
-//     pub fn timestamp(&self) -> SystemTime {
-//         match self {
-//             SynchronizerPacket::Mocap(bundle) => bundle.timetag.into(),
-//             // TODO determine what the proper conversion factor would be here
-//             SynchronizerPacket::Audio((meta, pkt)) => {
-//                 // time offset since the zero time
-//                 let time_offset_secs = pkt.header.timestamp as f32 / meta.clock_rate;
-//                 let time_offset_nanos = time_offset_secs * 1e6;
-//                 let y = meta.zero_time + Duration::from_nanos(time_offset_nanos as u64);
-//                 return y
-//             }
-//         }
-//     }
-// }
-//
-// impl PartialEq for SynchronizerPacket {
-//     fn eq(&self, other: &Self) -> bool {
-//         match (self, other) {
-//             (SynchronizerPacket::Mocap(b1), SynchronizerPacket::Mocap(b2)) => {
-//                 return b1.timetag == b2.timetag
-//             },
-//             (a1@SynchronizerPacket::Audio((_)), a2@SynchronizerPacket::Audio(_)) => {
-//                 a1.timestamp() == a2.timestamp()
-//             }
-//         }
-//     }
-// }
-//
-// impl Eq for SynchronizerPacket {
-//
-//
-// }
-//
-// impl PartialOrd for SynchronizerPacket {
-//     // fn cmp(&self, other: &Self) -> Ordering {
-//     //     return self.timestamp().cmp(other.timestamp())
-//     // }
-//
-//     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-//         return self.timestamp().partial_cmp(&other.timestamp())
-//     }
-// }
-//
-//
-// impl Ord for SynchronizerPacket {
-//     fn cmp(&self, other: &Self) -> Ordering {
-//         return self.timestamp().cmp(&other.timestamp())
-//     }
-// }
 
+/// Wrapper for an OSC bundle.
+/// Used to apply a sort-order to them based on timestamps.
 #[derive(Clone, Debug)]
 pub struct OscData {
     bundle: OscBundle
 }
 
-// impl OscData {
-//     fn as_packet(&mut self) -> &mut OscPacket {
-//         OscPacket::Bundle(self.bundle)
-//     }
-// }
 
 impl From<OscBundle> for OscData {
     fn from(packet: OscBundle) -> Self {
@@ -176,18 +126,12 @@ impl PartialOrd for OscData {
     }
 }
 
-// impl PartialOrd for OscData {
-//     fn cmp(&self, other: &Self) -> Ordering {
-//         todo!()
-//     }
-// }
-
 pub struct Synchronizer {
-    // mocap_in: Receiver<OscBundle>,
-    // audio_in: Receiver<RTPPacket>,
+    /// The channel used to send combined data out to the main server
     combined_out: Sender<VRTPPacket>,
     /// Two heaps, sorted by timestamps.
     /// Should automatically keep our data sorted as it is ingested.
+    /// Note that we wrap these in reverse to make them min-heaps instead of max heaps.
     audio_heap: BinaryHeap<Reverse<RTPPacket>>,
     mocap_heap: BinaryHeap<Reverse<OscData>>,
     /// The time at which the synchronizer was started. Used for re-syncing.
@@ -198,9 +142,6 @@ impl Synchronizer {
 
     pub fn new(audio_out: &Sender<VRTPPacket>) -> Self {
         Self {
-            // mocap_in,
-            // audio_in,
-            // combined_out,
             combined_out: audio_out.clone(),
             audio_heap: BinaryHeap::new(),
             mocap_heap: BinaryHeap::new(),
@@ -214,7 +155,10 @@ impl Synchronizer {
 
     /// Take in the data and handle it appropriately
     pub async fn intake(&mut self, mut mocap_in: Receiver<OscBundle>, mut audio_in: Receiver<Packet>, audio_clock_rate: f32) {
-        let mut rtp_meta_base: Option<RTPMeta> = None;
+        // RTP meta stores meta information about the stream, such as t=0,
+        // so we create it the first time and then just keep re-using it.
+        let mut stream_info: Option<RTPStreamInfo> = None;
+        // Timestamp of the last stream we handled
         let mut last_handled_timestamp = SystemTime::now();
 
         // analytics
@@ -238,20 +182,26 @@ impl Synchronizer {
                             warn!("Sync audio in shutting down");
                             break
                         }
+                        // Data in is an audio packet
                         Some(d) => {
-                            let working_meta = match rtp_meta_base {
+                            // If we don't have any info on the stream, grab info from this packet
+                            let working_meta = match stream_info {
                                 Some(m) => m,
                                 None => {
-                                    let new_base = RTPMeta::new(
+                                    // We don't have an existing
+                                    let new_base = RTPStreamInfo::new(
                                             d.header.timestamp,
                                             audio_clock_rate
                                         );
-                                    rtp_meta_base = Some(new_base);
+                                    stream_info = Some(new_base);
                                     new_base
                                 }
 
                             };
+                            // grab some analytics
+                            // todo add a server analytics channel with a bunch of enums to track pressure
                             let cur_ts = d.header.timestamp as u64;
+
 
                             trace!("dt: {}", cur_ts - last_audio_timestamp);
                             if n_audio_packets % 500 == 0 {
@@ -262,15 +212,21 @@ impl Synchronizer {
                             n_audio_packets += 1;
                             trace!("cur_ts: {cur_ts}");
 
+                            // End analytics!
+
+
                             let rtp = RTPPacket::new(
                                 d,
                                 working_meta
                             );
 
+                            // Audio events will probably come in a bit less frequently than mocap.
+                            // This is currently the assumption that I'm making, at least.
+                            // When a new audio packet comes in, we'll clear the existing mocap buffer and send the data
+                            // along with the mocap
                             let mut mocap_parts = vec![];
                             if !self.mocap_heap.is_empty() {
-                                // time to pull all the mocap packets into one bunch
-
+                                // extract all of the mocap packets from the heap in order, and pull them into
                                 while let Some(Reverse(x)) = self.mocap_heap.pop() {
                                     mocap_parts.push(x)
                                 }
@@ -289,22 +245,25 @@ impl Synchronizer {
                 },
 
                 mocap = mocap_in.recv() => {
-                    let data = match mocap {
+                    // mocap data in. Just pull it in and add it to the heap.
+                    match mocap {
                         None => {
                             warn!("Sync mocap in shutting down");
                             break
                         }
                         Some(d) => {
                             let osc_pkt = OscData::from(d);
+                            // insert the mocap packet.
+                            // note that we wrap it in reverse
                             self.mocap_heap.push(Reverse(osc_pkt));
                             // osc_pkt
                         }
                     };
-                    // SynchronizerPacket::Mocap(data)
                 },
 
             };
 
+            // more analytics
             if (n_packets_through % 500 == 0) {
                 info!("Current pressure:");
                 info!("Audio: {}", self.audio_heap.len());
@@ -319,25 +278,10 @@ impl Synchronizer {
             last_time = cur_time;
 
 
-            // debug!("")
             trace!("Average packet time is currently {}ms", (durs_micro / n_packets_through) as f64);
             if n_audio_packets > 0 {
                 trace!("Average audio timestamp difference is {}", (audio_duration_ts / n_audio_packets) as f64);
             }
-
-
-
-
-            // dbg!(&sync_packet);
-
-            // if self.audio_heap.len() >
-
-
-
-            // match sync_packet
-
-
-
 
         }
 

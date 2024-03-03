@@ -1,6 +1,4 @@
-use std::collections::HashMap;
 use std::net::{SocketAddr, SocketAddrV4};
-use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -12,6 +10,7 @@ use tokio::sync::mpsc::{Receiver, Sender};
 
 use protocol::{OSCDecodable, OSCEncodable, UserData};
 use protocol::backing_track::BackingTrackData;
+use protocol::handshake::ClientPortMap;
 use protocol::osc_messages_in::ClientMessage;
 use protocol::osc_messages_out::ServerMessage;
 use protocol::vrl_packet::VRLOSCPacket;
@@ -21,7 +20,6 @@ use crate::client::synchronizer::OscData;
 
 pub mod audience;
 pub mod performer;
-// mod peer_connection;
 mod streaming;
 pub mod synchronizer;
 
@@ -40,11 +38,15 @@ pub struct ClientChannelData {
     pub client_events_in: Sender<ClientMessage>,
     /// Get mocap events to transmit out to our clients
     pub audience_mocap_out: Option<Receiver<OscData>>,
+
+    // These channels are the receiving end of TCP sockets,
+    // populated on new connections
     /// Get our client event socket from the server
     pub client_event_socket_chan: Option<Receiver<TcpStream>>,
     pub backing_track_socket_chan: Option<Receiver<TcpStream>>,
     pub server_event_socket_chan: Option<Receiver<TcpStream>>,
-    /// Data inbound from the synchronizer
+
+    /// This channel is for receiving data from the server's dispatch thread to send out.
     pub from_sync_out_chan: Option<Receiver<VRTPPacket>>,
 
     // channels dependent on the synchronizer, thus may exist depending on the type of client that we are
@@ -53,67 +55,15 @@ pub struct ClientChannelData {
     // This means that they may exist, or may not if we're an audience member.
     pub synchronizer_osc_in: Option<Receiver<VRLOSCPacket>>,
     pub synchronizer_audio_in: Option<Receiver<AudioPacket>>,
-    /// Sending data from the synchronizer to the server's output thread.
+    /// This channel is for performers to pass their own VRTP data onto the server dispatch thread.
     pub synchronizer_vrtp_out: Option<Sender<VRTPPacket>>,
 }
-
-// impl ClientChannelData {
-//     pub fn new(server_events_out: Receiver<ServerMessage>,
-//                client_events_in: Sender<ClientMessage>, backing_track_in: Receiver<BackingTrackData>,
-//                event_socket_chan: Receiver<TcpStream>, backing_track_socket_chan: Receiver<TcpStream>,
-//         server_event_socket_chan: Receiver<TcpStream>, mocap_chan: Receiver<OscPacket>
-//     ) -> Self {
-//         Self {
-//             server_events_out: Some(server_events_out),
-//             client_events_in: client_events_in,
-//             backing_track_in: Some(backing_track_in),
-//             client_event_socket_chan: Some(event_socket_chan),
-//             backing_track_socket_chan: Some(backing_track_socket_chan),
-//             server_event_socket_chan: Some(server_event_socket_chan),
-//             synchronizer_osc_in: None,
-//             synchronizer_audio_in: None,
-//             synchronizer_vrtp_out: None,
-//             audience_mocap_out: Some(mocap_chan)
-//         }
-//     }
-// }
-
-/// Remote ports available on the client.
-#[derive(Clone, Debug)]
-pub struct ClientPorts {
-    /// Port that server events will be sent to
-    server_event_port: u16,
-    /// Port that new backing tracks will be sent to
-    backing_track_port: u16,
-    /// Port that audience mocap will be sent to
-    audience_mocap_port: u16,
-    /// Port that will be receiving VRTP packets
-    vrtp_port: u16,
-    /// Any supplemental ports that the client should be listening on.
-    extra_ports: Arc<RwLock<HashMap<String, u16>>>
-}
-
-impl ClientPorts {
-
-    pub fn new(server_event_port: u16, backing_track_port: u16, vrtp_port: u16, audience_mocap_port: u16, extra_ports: Option<HashMap<String, u16>>) -> Self {
-
-        Self {
-            server_event_port,
-            backing_track_port,
-            vrtp_port,
-            audience_mocap_port,
-            extra_ports: Arc::new(RwLock::new(extra_ports.unwrap_or(HashMap::new())))
-        }
-    }
-}
-
-
 
 #[async_trait]
 /// Trait defining the necessary behavior for a client of our server.
 pub trait VRLClient {
 
-    fn ports(&self) -> &ClientPorts;
+    fn ports(&self) -> &ClientPortMap;
 
     fn channels(&self) -> &ClientChannelData;
 
@@ -130,11 +80,10 @@ pub trait VRLClient {
             let server_event_sender = self.channels_mut().server_events_out.take().unwrap();
 
             let server_sock_chan = self.channels_mut().server_event_socket_chan.take().unwrap();
-            let server_port = self.ports().server_event_port;
             let user_data = self.user_data().clone();
 
             tokio::spawn(async move {
-                Self::server_event_sender(server_sock_chan, server_event_sender).await
+                Self::server_event_sender(server_sock_chan, server_event_sender, &user_data.fancy_title).await
             });
         }
 
@@ -143,8 +92,8 @@ pub trait VRLClient {
             let synchronizer_recv = self.channels_mut().from_sync_out_chan.take().unwrap();
             let mocap_recv = self.channels_mut().audience_mocap_out.take().unwrap();
             // Send from whatever port, we'll be blasting directly to the client anyway
-            let sync_addr = SocketAddr::new(self.user_data().remote_ip_addr, self.ports().vrtp_port);
-            let mocap_addr = SocketAddr::new(self.user_data().remote_ip_addr, self.ports().audience_mocap_port);
+            let sync_addr = SocketAddr::new(self.user_data().remote_ip_addr, self.ports().vrtp_data);
+            let mocap_addr = SocketAddr::new(self.user_data().remote_ip_addr, self.ports().audience_motion_capture);
 
             tokio::spawn(async move {
                 Self::client_transmitter(synchronizer_recv, sync_addr, "Synchronizer to client").await;
@@ -203,52 +152,63 @@ pub trait VRLClient {
         }
     }
 
-    /// Thread handling output for any server events.
-    async fn server_event_sender(mut event_sock: Receiver<TcpStream>, mut sender_in: Receiver<ServerMessage>) {
-        'outer: loop {
-            let client_stream = event_sock.recv().await;
-            if client_stream.is_none() {
-                debug!("Server event listener shutting down.");
-                break;
-            } else {
-                debug!("Server event listener is up and ready")
-            }
-            let mut client_stream = client_stream.unwrap();
+    /// Thread which receives server events from the server and forwards them onto clients.
+    async fn server_event_sender(mut stream_sock: Receiver<TcpStream>, mut sender_in: Receiver<ServerMessage>, label: &str) {
+        let client_stream = stream_sock.recv().await;
+        if client_stream.is_none() {
+            warn!("{label} Server event listener never received a stream before the channel closed.");
+            return;
+        } else {
+            debug!("Server event listener is up and ready")
+        }
+        let mut client_stream = client_stream.unwrap();
 
-            debug!("Server event sender has gotten a client stream!");
-
-            loop {
-                let res = sender_in.recv().await;
-
-                // our server has been killed!
-                if let None = res {
-                    // debug!("Server event listener for {0} has been destroyed.", &user_data.fancy_title);
-                    break 'outer;
-                }
-
-                let msg = res.unwrap().encode();
-                let msg = OscPacket::Message(msg);
-
-                let packet = encoder::encode(&msg);
-
-                if let Err(e) = &packet {
-                    warn!("Failed to encode osc message {0:?}: {e}", &msg);
-                    continue;
-                }
-
-                let packet = packet.unwrap();
-
-                let sent = client_stream.write(&packet).await;
-
-                match sent {
-                    Ok(_) => {
-                        debug!("Sent a packet {0:?}", &packet);
+        loop {
+            tokio::select! {
+                biased;
+                new_sock = stream_sock.recv() => {
+                    match new_sock {
+                        None => {
+                            warn!("{label} Client stream is closed, shutting down event sender");
+                            break;
+                        },
+                        Some(s) => {
+                            info!("Server event stream has been updated!");
+                            client_stream = s;
+                        }
                     }
-                    Err(e) => {
-                        warn!("Failed to send packet: {e}");
-                        // if we fail sending, we'll just have to mark this as terminated.
-                        // loop back around to try for another listener.
-                        continue 'outer;
+                },
+                server_msg = sender_in.recv() => {
+                    // our server has been killed!
+                    if let None = server_msg {
+                        // debug!("Server event listener for {0} has been destroyed.", &user_data.fancy_title);
+                        break;
+                    }
+
+                    let msg = server_msg.unwrap().encode();
+                    let msg = OscPacket::Message(msg);
+
+                    let packet = encoder::encode(&msg);
+
+                    if let Err(e) = &packet {
+                        warn!("{label} Failed to encode osc message {0:?}: {e}", &msg);
+                        continue;
+                    }
+
+                    let packet = packet.unwrap();
+
+                    let sent = client_stream.write(&packet).await;
+
+                    match sent {
+                        Ok(_) => {
+                            debug!("{label} Sent a packet {0:?}", &packet);
+                        }
+                        Err(e) => {
+                            warn!("{label} Failed to send packet: {e}");
+                            // if we fail sending, we'll just have to mark this as terminated.
+                            // loop back around to try for another listener.
+                            continue;
+                        }
                     }
                 }
             }
@@ -406,5 +366,11 @@ pub trait VRLClient {
         }
 
         debug!("Backing track task shutting down.")
+    }
+
+    /// Heartbeat service.
+    /// Used to keep tabs on whether the service is alive or if it needs to be disconnected.
+    async fn liveliness_monitor() {
+
     }
 }

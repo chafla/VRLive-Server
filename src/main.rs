@@ -2,8 +2,9 @@ use clap::{command, Parser};
 use log::LevelFilter;
 use simplelog;
 use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger};
+use protocol::handshake::ServerPortMap;
 
-use server::server::{PortMap, Server};
+use server::server::{Server};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -35,9 +36,13 @@ async fn main() {
     // gstreamer::init().unwrap();
 
     let args = Args::parse();
+    let port_map = ServerPortMap {
+        new_connections: args.port,
+        ..Default::default()
+    };
     // server::server::Portmap
     let mut server = Server::new(
-        args.host, PortMap::new(args.port), args.multicast
+        args.host, port_map, args.multicast
     );
 
     let _ = server.start().await;
