@@ -35,9 +35,9 @@ impl Synchronizer {
         }
     }
 
-    pub async fn start(mocap_in: Receiver<OscBundle>, audio_in: Receiver<Packet>, combined_out: Sender<VRTPPacket>) {
-
-    }
+    // pub async fn start(mocap_in: Receiver<OscBundle>, audio_in: Receiver<Packet>, combined_out: Sender<VRTPPacket>) {
+    //
+    // }
 
     /// Take in the data and handle it appropriately
     pub async fn intake(&mut self, mut mocap_in: Receiver<OscBundle>, mut audio_in: Receiver<Packet>, audio_clock_rate: f32) {
@@ -45,7 +45,7 @@ impl Synchronizer {
         // so we create it the first time and then just keep re-using it.
         let mut stream_info: Option<RTPStreamInfo> = None;
         // Timestamp of the last stream we handled
-        let mut last_handled_timestamp = SystemTime::now();
+        // let mut last_handled_timestamp = SystemTime::now();
 
         // analytics
         let mut durs_micro = 0;
@@ -60,7 +60,7 @@ impl Synchronizer {
         let mut mocap_duration_ts = 0;
         let mut n_mocap_packets = 0;
         loop {
-            let sync_packet = tokio::select! {
+            tokio::select! {
                 biased;  // make sure audio gets handled first
                 audio = audio_in.recv() => {
                     match audio {
@@ -86,6 +86,7 @@ impl Synchronizer {
                             };
                             // grab some analytics
                             // todo add a server analytics channel with a bunch of enums to track pressure
+                            // todo ensure we don't include any mocap messages that are older than a certain threshold
                             let cur_ts = d.header.timestamp as u64;
 
 
@@ -93,7 +94,7 @@ impl Synchronizer {
                             if n_audio_packets % 500 == 0 {
                                 audio_duration_ts = 0;  // reset it so we don't stupidly overflow
                             }
-                            audio_duration_ts += (cur_ts - last_audio_timestamp);
+                            audio_duration_ts += cur_ts - last_audio_timestamp;
                             last_audio_timestamp = d.header.timestamp as u64;
                             n_audio_packets += 1;
                             trace!("cur_ts: {cur_ts}");
@@ -150,7 +151,7 @@ impl Synchronizer {
             };
 
             // more analytics
-            if (n_packets_through % 500 == 0) {
+            if n_packets_through % 500 == 0 {
                 info!("Current pressure:");
                 info!("Audio: {}", self.audio_heap.len());
                 info!("Mocap: {}", self.mocap_heap.len())

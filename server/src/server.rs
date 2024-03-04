@@ -7,6 +7,7 @@ use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::Arc;
 use std::time::Instant;
+use bytes::Bytes;
 
 use log::{debug, error, info, trace, warn};
 use rosc::{decoder, OscBundle, OscPacket};
@@ -39,7 +40,10 @@ use crate::MAX_CHAN_SIZE;
 const DEFAULT_CHAN_SIZE: usize = 2048;
 
 const HANDSHAKE_BUF_SIZE: usize = DEFAULT_CHAN_SIZE;
-const LISTENER_BUF_SIZE: usize = DEFAULT_CHAN_SIZE;
+/// Corresponds to the amount of audio data that we will pull over the network for each packet
+const AUDIO_LISTENER_BUF_SIZE: usize = 10000;
+
+const MOCAP_LISTENER_BUF_SIZE: usize = 10000;
 
 const AUDIENCE_BUFFER_CHAN_SIZE: usize = DEFAULT_CHAN_SIZE;
 
@@ -635,7 +639,7 @@ impl Server {
         info!("Listening for audience mocap on {0}", &socket_addr);
         let sock = UdpSocket::bind(&socket_addr).await.unwrap();
 
-        let mut listener_buf : [u8; LISTENER_BUF_SIZE] = [0; LISTENER_BUF_SIZE];
+        let mut listener_buf : [u8; MOCAP_LISTENER_BUF_SIZE] = [0; MOCAP_LISTENER_BUF_SIZE];
 
         loop {
             let (bytes_read, _) = match sock.recv_from(&mut listener_buf).await {
@@ -911,11 +915,11 @@ impl Server {
 
         let sock = UdpSocket::bind(listening_addr).await?;
         // let mut bytes_in;
-        let mut listener_buf: [u8; LISTENER_BUF_SIZE];// = [0; LISTENER_BUF_SIZE];
+        let mut listener_buf: [u8; MOCAP_LISTENER_BUF_SIZE];// = [0; LISTENER_BUF_SIZE];
         let mut last_notice = Instant::now();
         loop {
             // bytes_in = bytes::BytesMut::with_capacity(4096);
-            listener_buf = [0; LISTENER_BUF_SIZE];
+            listener_buf = [0; MOCAP_LISTENER_BUF_SIZE];
             let (bytes_read, incoming_addr) = match sock.recv_from(&mut listener_buf).await {
                 Err(e) => {
                     error!("failed to read from listener buffer: {e}");
@@ -986,11 +990,11 @@ impl Server {
 
         let sock = UdpSocket::bind(listening_addr).await?;
         // let mut bytes_in;
-        let mut listener_buf : [u8; LISTENER_BUF_SIZE];// = [0; LISTENER_BUF_SIZE];
+        let mut listener_buf : [u8; AUDIO_LISTENER_BUF_SIZE];// = [0; LISTENER_BUF_SIZE];
         let mut last_notice = Instant::now();
         loop {
             // bytes_in = bytes::BytesMut::with_capacity(4096);
-            listener_buf = [0; LISTENER_BUF_SIZE];
+            listener_buf = [0; AUDIO_LISTENER_BUF_SIZE];
             let (bytes_read, incoming_addr) = match sock.recv_from(&mut listener_buf).await {
                 Err(e) => {
                     error!("failed to read from listener buffer: {e}");
@@ -1000,7 +1004,7 @@ impl Server {
             };
 
             // let bytes_in = bytes_in.freeze();
-            trace!("Got {bytes_read} from {0}", &incoming_addr);
+            debug!("Got {bytes_read} audio bytes from {0}", &incoming_addr);
 
             // just forward the raw packets, do as little processing as possible
             // let datagram_data = &listener_buf[0..bytes_read];
@@ -1013,7 +1017,7 @@ impl Server {
             let performer_listener = match users_by_ip.read().await.get(&incoming_addr.ip().to_string()) {
                 None => {
                     if (Instant::now() - last_notice).as_secs() > 5 {
-                        trace!("Got performer mocap data from someone who we haven't handshaked with!");
+                        trace!("Got performer audio data from someone who we haven't handshaked with!");
                         last_notice = Instant::now();
                     }
                     continue;
@@ -1027,15 +1031,17 @@ impl Server {
                 }
             };
 
-            let pkt = match Packet::unmarshal(&mut listener_buf.as_ref()) {
+            // pull the read data into a new buffer, ensuring that we trim out any padding/additional bytes
+            // I've tried to just pull this into a regular bytesmut but it causes network issues with recv
+            let mut bytes_data = Bytes::copy_from_slice(&listener_buf[0..bytes_read]);
+
+            let pkt = match Packet::unmarshal(&mut bytes_data) {
                 Err(e) => {
                     error!("Audience audio listener received something that doesn't seem to be OSC: {e}");
                     continue;
                 },
                 Ok(r) => r
             };
-
-            // dbg!(&pkt);
 
             if let Err(e) = performer_listener.send(pkt).await {
                 error!("Failed to pass performer mocap data to the client: {e}");

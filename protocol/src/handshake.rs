@@ -26,7 +26,7 @@ impl HandshakeAck {
         Self {
             user_id,
             server_pretty_identifier,
-            ports: server_ports.unwrap_or(ServerPortMap::default())
+            ports: server_ports.unwrap_or_default()
         }
 
     }

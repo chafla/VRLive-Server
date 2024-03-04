@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 
 use bytes::{BufMut, Bytes, BytesMut};
+use log::error;
 use rosc::{OscBundle, OscPacket};
 use rosc::encoder::encode;
 use webrtc::rtp::packet::Packet;
@@ -59,7 +60,7 @@ impl Eq for RTPPacket {}
 
 impl PartialOrd for RTPPacket {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.packet.header.timestamp.partial_cmp(&other.packet.header.timestamp)
+        Some(self.cmp(other))
     }
 }
 
@@ -98,9 +99,9 @@ impl From<OscBundle> for OscData {
     }
 }
 
-impl Into<Bytes> for OscData {
-    fn into(self) -> Bytes {
-        let packet = OscPacket::Bundle(self.bundle);
+impl From<OscData> for Bytes {
+    fn from(value: OscData) -> Bytes {
+        let packet = OscPacket::Bundle(value.bundle);
         Bytes::from(encode(&packet).unwrap())
     }
 }
@@ -122,7 +123,7 @@ impl Ord for OscData {
 
 impl PartialOrd for OscData {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.bundle.timetag.partial_cmp(&other.bundle.timetag)
+        Some(self.cmp(other))
     }
 }
 
@@ -134,7 +135,7 @@ pub enum VRTPPacket {
 }
 
 impl TryInto<Bytes> for VRTPPacket {
-    type Error = ();
+    type Error = String;
 
     fn try_into(self) -> Result<Bytes, Self::Error> {
         match self {
@@ -151,18 +152,25 @@ impl TryInto<Bytes> for VRTPPacket {
                 let osc_size = osc_bytes.len();
 
 
-                let mut audio_bytes = BytesMut::new();
-                let audio_size = match rtp.packet.marshal_to(&mut audio_bytes) {
-                    Ok(s) => s,
-                    Err(e) => return Err(())
-                };
+                // let mut audio_bytes = BytesMut::with_capacity(1400);
+                let mut audio_buf: [u8; 2048] = [0; 2048];
+                // audio_bytes.reserve()
+                // let audio_size = match rtp.packet.marshal_to(&mut audio_buf) {
+                //     Ok(s) => s,
+                //     Err(e) => {
+                //
+                //         error!("Failed to convert data into packet for output: {e}");
+                //         return Err(e.to_string());
+                //     }
+                // };
+                let audio_size = rtp.packet.payload.len();
 
                 let pkt_size = audio_size + osc_size + 2;
 
                 // provide two bytes for the size of our total payload
 
-
-                assert!(pkt_size < 1400);
+                // TODO find a way to ensure packets don't exceed mtu
+                // assert!(pkt_size < 1400);
 
                 // let mut bytes_out = BytesMut::with_capacity(pkt_size);
                 // preface with the total sizes
@@ -171,7 +179,7 @@ impl TryInto<Bytes> for VRTPPacket {
                 bytes_out.put_u16(audio_size as u16);
 
                 bytes_out.put(osc_bytes);
-                bytes_out.put(audio_bytes);
+                bytes_out.put(&rtp.packet.payload[0..audio_size]);
 
 
 

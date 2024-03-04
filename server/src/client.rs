@@ -155,15 +155,14 @@ pub trait VRLClient {
 
             if !sent_once {
                 sent_once = true;
-                info!("Sent a {label} packet  to {}", &target_addr)
+                info!("Sent a {label} packet to {}", &target_addr)
             }
 
-            debug!("{label} client transmitter sending data out to {}!", &target_addr);
+            trace!("{label} client transmitter sending data out to {}!", &target_addr);
 
             let msg_bytes = match msg.try_into() {
                 Ok(b) => b,
-                Err(_) => {
-                    error!("{label} failed to convert data into packet for output.");
+                Err(e) => {
                     continue;
                 }
             };
