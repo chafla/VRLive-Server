@@ -48,6 +48,14 @@ impl RTPPacket {
     pub fn raw_timestamp(&self) -> u32 {
         self.packet.header.timestamp + self.meta.zero_time
     }
+
+    pub fn packet(&self) -> &Packet {
+        &self.packet
+    }
+
+    pub fn metadata(&self) -> &RTPStreamInfo {
+        &self.meta
+    }
 }
 
 impl PartialEq for RTPPacket {
@@ -179,7 +187,7 @@ impl TryInto<Bytes> for VRTPPacket {
                 bytes_out.put_u16(audio_size as u16);
 
                 bytes_out.put(osc_bytes);
-                bytes_out.put(&rtp.packet.payload[0..audio_size]);
+                bytes_out.put(&rtp.packet.payload[..]);
 
 
 

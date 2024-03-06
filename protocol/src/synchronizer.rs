@@ -39,6 +39,10 @@ impl Synchronizer {
     //
     // }
 
+    pub async fn output(&mut self) {
+
+    }
+
     /// Take in the data and handle it appropriately
     pub async fn intake(&mut self, mut mocap_in: Receiver<OscBundle>, mut audio_in: Receiver<Packet>, audio_clock_rate: f32) {
         // RTP meta stores meta information about the stream, such as t=0,
@@ -90,13 +94,13 @@ impl Synchronizer {
                             let cur_ts = d.header.timestamp as u64;
 
 
-                            trace!("dt: {}", cur_ts - last_audio_timestamp);
-                            if n_audio_packets % 500 == 0 {
-                                audio_duration_ts = 0;  // reset it so we don't stupidly overflow
-                            }
-                            audio_duration_ts += cur_ts - last_audio_timestamp;
-                            last_audio_timestamp = d.header.timestamp as u64;
-                            n_audio_packets += 1;
+                            // trace!("dt: {}", cur_ts - last_audio_timestamp);
+                            // if n_audio_packets % 500 == 0 {
+                            //     audio_duration_ts = 0;  // reset it so we don't stupidly overflow
+                            // }
+                            // audio_duration_ts += cur_ts - last_audio_timestamp;
+                            // last_audio_timestamp = d.header.timestamp as u64;
+                            // n_audio_packets += 1;
                             trace!("cur_ts: {cur_ts}");
 
                             // End analytics!
@@ -107,22 +111,26 @@ impl Synchronizer {
                                 working_meta
                             );
 
+                            self.audio_heap.push(Reverse(rtp));
+
+                            // dbg!(&rtp);
+
                             // Audio events will probably come in a bit less frequently than mocap.
                             // This is currently the assumption that I'm making, at least.
                             // When a new audio packet comes in, we'll clear the existing mocap buffer and send the data
                             // along with the mocap
-                            let mut mocap_parts = vec![];
-                            if !self.mocap_heap.is_empty() {
-                                // extract all of the mocap packets from the heap in order, and pull them into
-                                while let Some(Reverse(x)) = self.mocap_heap.pop() {
-                                    mocap_parts.push(x)
-                                }
-                            }
-
-                            if let Err(e) = self.combined_out.send(VRTPPacket::Raw(mocap_parts, rtp)).await {
-                                error!("Failed to send to sync out: channel likely closed ({e})");
-                                break;
-                            }
+                            // let mut mocap_parts = vec![];
+                            // if !self.mocap_heap.is_empty() {
+                            //     // extract all of the mocap packets from the heap in order, and pull them into
+                            //     while let Some(Reverse(x)) = self.mocap_heap.pop() {
+                            //         mocap_parts.push(x)
+                            //     }
+                            // }
+                            //
+                            // if let Err(e) = self.combined_out.send(VRTPPacket::Raw(mocap_parts, rtp)).await {
+                            //     error!("Failed to send to sync out: channel likely closed ({e})");
+                            //     break;
+                            // }
 
                             // self.audio_heap.push(Reverse(rtp));
 
