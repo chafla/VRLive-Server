@@ -1004,7 +1004,7 @@ impl Server {
             };
 
             // let bytes_in = bytes_in.freeze();
-            debug!("Got {bytes_read} audio bytes from {0}", &incoming_addr);
+            trace!("Got {bytes_read} audio bytes from {0}", &incoming_addr);
 
             // dbg!(&listener_buf[0..bytes_read]);
             // just forward the raw packets, do as little processing as possible

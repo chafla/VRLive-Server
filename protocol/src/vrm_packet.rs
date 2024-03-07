@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::f32::consts::PI;
 use rosc::{OscBundle, OscMessage, OscPacket, OscType};
 use crate::vrm_packet::ObjectData::{Position, Rotation};
 
@@ -9,16 +10,41 @@ enum OutputMessageFormat {
     VRM
 }
 
+fn euler_angles_to_quaternion_degrees(roll: f32, pitch: f32, yaw: f32) -> (f32, f32, f32, f32) {
+    let conversion_factor: f32 = 2.0 * PI / 360.0;
+    euler_angles_to_quaternion(roll * conversion_factor, pitch * conversion_factor, yaw * conversion_factor)
+}
+
+/// Take euler angles in radians and convert them into a quaternion
+fn euler_angles_to_quaternion(roll: f32, pitch: f32, yaw: f32) -> (f32, f32, f32, f32) {
+    // https://en.wikipedia.org/wiki/Conversion_between_quaternions_and_Euler_angles
+    let cr = (roll * 0.5).cos();
+    let sr = (roll * 0.5).sin();
+    let cp = (pitch * 0.5).cos();
+    let sp = (pitch * 0.5).sin();
+    let cy = (yaw * 0.5).cos();
+    let sy = (yaw * 0.5).sin();
+
+    let qw = cr * cp * cy + sr * sp * sy;
+    let qx = sr * cp * cy - cr * sp * sy;
+    let qy = cr * sp * cy + sr * cp * sy;
+    let qz = cr * cp * sy - sr * sp * cy;
+
+    (qx, qy, qz, qw)
+}
+
 // deconstruct slime vr message and convert it into a standardized format
 fn slime_id_to_body_part<T>(message: &OscMessage, id_mapping: T) -> Result<SlimeVRMessageType, String>
     where T: Fn(u32) -> &'static str
 {
     let mut msg_parts = message.addr.split("/");  // /tracking/trackers/...
 
+    // leads with an empty string
+    assert_eq!(msg_parts.next(), Some(""));
     // msg_parts.s
 
-    assert!(msg_parts.next() == Some("tracking"));
-    assert!(msg_parts.next() == Some("trackers"));
+    assert_eq!(msg_parts.next(), Some("tracking"));
+    assert_eq!(msg_parts.next(), Some("trackers"));
     // todo clean this up
     let part = if let Some(part) = msg_parts.next() {
         if let Ok(id) = part.parse() {
@@ -40,7 +66,15 @@ fn slime_id_to_body_part<T>(message: &OscMessage, id_mapping: T) -> Result<Slime
     let msg_type = match (msg_parts.next(), message.args.as_slice()) {
 
         (Some("position"), [OscType::Float(x), OscType::Float(y), OscType::Float(z)]) => Position(*x, *y, *z),
+        // already in quaternion form
         (Some("rotation"), [OscType::Float(x), OscType::Float(y), OscType::Float(z), OscType::Float(w)]) => Rotation(*x, *y, *z, *w),
+        (Some("rotation"), [OscType::Float(x), OscType::Float(y), OscType::Float(z)]) => {
+            // i hope you like gimbal lock
+            // also slimevr sends them out in degrees
+            let (qx, qy, qz, qw) = euler_angles_to_quaternion_degrees(*x, *y, *z);
+            Rotation(qx, qy, qz, qw)
+        }
+        (Some(s), a) => panic!("Unknown message type: {s} with {a:?}"),
         _ => unimplemented!()
     };
 
@@ -89,6 +123,7 @@ fn ligeia_vrm_id(id: u32) -> &'static str {
 
 struct VRMBoneData {
     dest: String,
+    kind: String,
     position: (f32, f32, f32),
     // quaternion
     rotation: (f32, f32, f32, f32)
@@ -97,6 +132,7 @@ struct VRMBoneData {
 impl Default for VRMBoneData {
     fn default() -> Self {
         Self {
+            kind: "".into(),
             dest: "".into(),
             position: (0.0, 0.0, 0.0),
             rotation: (0.0, 0.0, 0.0, 0.0)
@@ -108,6 +144,15 @@ impl Default for VRMBoneData {
 enum SlimeVRTarget {
     Head,
     Tracker(&'static str)
+}
+
+impl SlimeVRTarget {
+    fn to_string(&self) -> String {
+        match self {
+            SlimeVRTarget::Head => "Head".into(),
+            SlimeVRTarget::Tracker(s) => s.to_string()
+        }
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -166,6 +211,8 @@ fn convert_to_vrm<T>(b: &OscBundle, as_format: &OutputMessageFormat, converter: 
             OscPacket::Message(m) => {
                 let converted_message = slime_id_to_body_part(m, converter).unwrap();
                 let msg_addr = converted_message.get_vrm_addr("Bone");
+
+                // let msg_kind = converted_message.sou
                 let entry = hm.entry(converted_message.source).or_default();
                 match converted_message.data_type {
                     Rotation(x,y,z, w) => entry.rotation = (x, y, z, w),
@@ -181,10 +228,11 @@ fn convert_to_vrm<T>(b: &OscBundle, as_format: &OutputMessageFormat, converter: 
 
 
 
-    for (v) in hm.values() {
+    for (k, v) in hm.iter() {
         messages.push(OscPacket::Message(OscMessage{
             addr: v.dest.clone(),
             args: vec![
+                OscType::String(k.to_string()),
                 v.position.0.into(),
                 v.position.1.into(),
                 v.position.2.into(),
