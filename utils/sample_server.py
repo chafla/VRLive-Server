@@ -1,15 +1,21 @@
 # echo-client.py
-
+import queue
 import socket
 import json
 import sys
 import threading
 import time
 from os import path
+import pythonosc.osc_packet
+from pythonosc import parsing
+from osc4py3.oscbuildparse import decode_packet
 
+
+performer_mocap_queue = queue.Queue()
 
 HOST = "localhost"  # The server's hostname or IP address
 # PORT = 5653  # The port used by the server
+OSC_IN_HOST = "129.21.149.239"
 
 remote_ports = {
     "new_connection": 5653,
@@ -20,6 +26,9 @@ remote_ports = {
     "server_event_sock": 5658,
     "audience_mocap": 9000
 }
+
+osc_out = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+osc_out.connect((OSC_IN_HOST, 9050))
 
 try:
     port_offset = int(sys.argv[1])
@@ -94,16 +103,15 @@ def client_event_thread():
 
 
 def vrtp_in_thread():
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as osc_out:
-        osc_out.connect()
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.bind((HOST, ports["vrtp_data"]))
-            print("Bound for vrtp")
-            audio_file = open("audio_out.ogg", "wb")
-            mocap_file = open("mocap_out.osc", "wb")
-            while True:
-                data = s.recv(20000)
-                deconstruct_vrtp(data, audio_file, mocap_file)
+
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.bind((HOST, ports["vrtp_data"]))
+        print("Bound for vrtp")
+        audio_file = open("audio_out.ogg", "wb")
+        mocap_file = open("mocap_out.osc", "wb")
+        while True:
+            data = s.recv(50000)
+            deconstruct_vrtp(data, audio_file, mocap_file, osc_out)
 
             # print("VRTP data in")
 
@@ -112,20 +120,41 @@ def mocap_in_thread():
         s.bind((HOST, ports["audience_motion_capture"]))
         while True:
             data = s.recv(2048)
-
+            osc_out.send(data)
             print("audience mocap data in")
 
-def deconstruct_vrtp(pkt_in: bytes, audio_file, mocap_file):
-    total_pl_size = int.from_bytes(pkt_in[0:2], "big")
-    osc_size = int.from_bytes(pkt_in[2:4], "big")
-    audio_size = int.from_bytes(pkt_in[4:6], "big")
-    osc_data = pkt_in[6:osc_size]
-    audio_data = pkt_in[6+osc_size:]
+packets_in = 0
+
+def deconstruct_vrtp(pkt_in: bytes, audio_file, mocap_file, mocap_sock):
+    total_pl_size = int.from_bytes(pkt_in[0:4], "big")
+    osc_size = int.from_bytes(pkt_in[4:6], "big")
+    audio_size = int.from_bytes(pkt_in[6:8], "big")
+    osc_data = pkt_in[8:osc_size + 8]
+    audio_data = pkt_in[8+osc_size:]
     # decoder = pyogg.opus.OpusDecoder()
     # res = pyogg.opus.opus_decode(decoder, audio_data, audio_size, )
     audio_file.write(audio_data)
     mocap_file.write(osc_data)
+    if osc_data:
+        # list comps my beloved
+        res = decode_packet(osc_data)
+        global packets_in  # hehe
+        packets_in += 1
+        if packets_in % 100 == 0:
+            # just to make sure it works
+            pkt = pythonosc.osc_packet.OscPacket(osc_data)
+        performer_mocap_queue.put(osc_data)
+        # [performer_mocap_queue.put(b"#bundle" + b) for b in osc_data.split(b"#bundle")[1:]]
+    # (osc_data)
+    # mocap_sock.send(osc_data)
     # print("a")
+
+def vrtp_mocap_relay():
+    while True:
+        mocap_data = performer_mocap_queue.get()
+        osc_out.send(mocap_data)
+        # data = decode_packet(mocap_data)
+        # print("guh")
 
 
 
@@ -169,6 +198,7 @@ def main():
     threading.Thread(target=backing_track_thread).start()
     threading.Thread(target=mocap_in_thread).start()
     threading.Thread(target=vrtp_in_thread).start()
+    threading.Thread(target=vrtp_mocap_relay).start()
 
 
 if __name__ == '__main__':
