@@ -1,15 +1,19 @@
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
-use std::time::SystemTime;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
-use log::{error, info, trace, warn};
+use log::{debug, error, info, trace, warn};
 use rosc::OscBundle;
 use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::Mutex;
 use tokio::time::Instant;
 use webrtc::rtp::packet::Packet as Packet;
 
 use crate::vrl_packet::{OscData, RTPPacket, RTPStreamInfo, VRTPPacket};
 
+
+static AUDIO_TIMEOUT: Duration = Duration::from_millis(50);
 // use crate::VRTPPacket;
 
 pub struct Synchronizer {
@@ -21,17 +25,16 @@ pub struct Synchronizer {
     audio_heap: BinaryHeap<Reverse<RTPPacket>>,
     mocap_heap: BinaryHeap<Reverse<OscData>>,
     /// The time at which the synchronizer was started. Used for re-syncing.
-    zero_time: u32
+    zero_time: u32,
 }
 
 impl Synchronizer {
-
     pub fn new(audio_out: &Sender<VRTPPacket>) -> Self {
         Self {
             combined_out: audio_out.clone(),
             audio_heap: BinaryHeap::new(),
             mocap_heap: BinaryHeap::new(),
-            zero_time: 0
+            zero_time: 0,
         }
     }
 
@@ -39,9 +42,7 @@ impl Synchronizer {
     //
     // }
 
-    pub async fn output(&mut self) {
-
-    }
+    pub async fn output(&mut self) {}
 
     /// Take in the data and handle it appropriately
     pub async fn intake(&mut self, mut mocap_in: Receiver<OscBundle>, mut audio_in: Receiver<Packet>, audio_clock_rate: f32) {
@@ -63,78 +64,80 @@ impl Synchronizer {
         let mut last_mocap_timestamp = 0;
         let mut mocap_duration_ts = 0;
         let mut n_mocap_packets = 0;
+
+        let mut try_to_send = false;
         loop {
             tokio::select! {
                 biased;  // make sure audio gets handled first
-                audio = audio_in.recv() => {
-                    match audio {
-                        None => {
-                            warn!("Sync audio in shutting down");
-                            break
-                        }
-                        // Data in is an audio packet
-                        Some(d) => {
-                            // If we don't have any info on the stream, grab info from this packet
-                            let working_meta = match stream_info {
-                                Some(m) => m,
+                audio_m = tokio::time::timeout(AUDIO_TIMEOUT, audio_in.recv()) => {
+                    match audio_m {
+                        Err(e) => {
+                            debug!("Audio data timed out, sending mocap data anyway");
+                            // Timed out, but we didn't get any audio data...
+                            // in the meantime, send what mocap data we have
+                            try_to_send = true;
+                        },
+                        Ok(audio) => {
+                            match audio {
                                 None => {
-                                    // We don't have an existing
-                                    let new_base = RTPStreamInfo::new(
-                                            d.header.timestamp,
-                                            audio_clock_rate
-                                        );
-                                    stream_info = Some(new_base);
-                                    new_base
+                                    warn!("Sync audio in shutting down");
+                                    break
                                 }
+                                // Data in is an audio packet
+                                Some(d) => {
+                                    // If we don't have any info on the stream, grab info from this packet
+                                    let working_meta = match stream_info {
+                                        Some(m) => m,
+                                        None => {
+                                            // We don't have an existing
+                                            let new_base = RTPStreamInfo::new(
+                                                    d.header.timestamp,
+                                                    audio_clock_rate
+                                                );
+                                            stream_info = Some(new_base);
+                                            new_base
+                                        }
 
-                            };
-                            // grab some analytics
-                            // todo add a server analytics channel with a bunch of enums to track pressure
-                            // todo ensure we don't include any mocap messages that are older than a certain threshold
-                            let cur_ts = d.header.timestamp as u64;
+                                    };
+                                    // grab some analytics
+                                    // todo add a server analytics channel with a bunch of enums to track pressure
+                                    // todo ensure we don't include any mocap messages that are older than a certain threshold
+                                    let cur_ts = d.header.timestamp as u64;
 
 
-                            // trace!("dt: {}", cur_ts - last_audio_timestamp);
-                            // if n_audio_packets % 500 == 0 {
-                            //     audio_duration_ts = 0;  // reset it so we don't stupidly overflow
-                            // }
-                            // audio_duration_ts += cur_ts - last_audio_timestamp;
-                            // last_audio_timestamp = d.header.timestamp as u64;
-                            // n_audio_packets += 1;
-                            trace!("cur_ts: {cur_ts}");
+                                    // trace!("dt: {}", cur_ts - last_audio_timestamp);
+                                    // if n_audio_packets % 500 == 0 {
+                                    //     audio_duration_ts = 0;  // reset it so we don't stupidly overflow
+                                    // }
+                                    // audio_duration_ts += cur_ts - last_audio_timestamp;
+                                    // last_audio_timestamp = d.header.timestamp as u64;
+                                    // n_audio_packets += 1;
+                                    trace!("cur_ts: {cur_ts}");
 
-                            // End analytics!
+                                    // End analytics!
 
 
-                            let rtp = RTPPacket::new(
-                                d,
-                                working_meta
-                            );
+                                    let rtp = RTPPacket::new(
+                                        d,
+                                        working_meta
+                                    );
 
-                            self.audio_heap.push(Reverse(rtp));
+                                    self.audio_heap.push(Reverse(rtp));
 
-                            // dbg!(&rtp);
+                                    // dbg!(&rtp);
 
-                            // Audio events will probably come in a bit less frequently than mocap.
-                            // This is currently the assumption that I'm making, at least.
-                            // When a new audio packet comes in, we'll clear the existing mocap buffer and send the data
-                            // along with the mocap
-                            // let mut mocap_parts = vec![];
-                            // if !self.mocap_heap.is_empty() {
-                            //     // extract all of the mocap packets from the heap in order, and pull them into
-                            //     while let Some(Reverse(x)) = self.mocap_heap.pop() {
-                            //         mocap_parts.push(x)
-                            //     }
-                            // }
-                            //
-                            // if let Err(e) = self.combined_out.send(VRTPPacket::Raw(mocap_parts, rtp)).await {
-                            //     error!("Failed to send to sync out: channel likely closed ({e})");
-                            //     break;
-                            // }
+                                    // Audio events will probably come in a bit less frequently than mocap.
+                                    // This is currently the assumption that I'm making, at least.
+                                    // When a new audio packet comes in, we'll clear the existing mocap buffer and send the data
+                                    // along with the mocap
+                                    try_to_send = true;
 
-                            // self.audio_heap.push(Reverse(rtp));
 
-                            // SynchronizerPacket::Audio(rtp)
+                                    // self.audio_heap.push(Reverse(rtp));
+
+                                    // SynchronizerPacket::Audio(rtp)
+                                }
+                            }
                         }
                     }
                 },
@@ -156,7 +159,25 @@ impl Synchronizer {
                     };
                 },
 
-            };
+            }
+            if try_to_send {
+                if let Some(Reverse(audio_pkt)) = self.audio_heap.pop() {
+                    let mut mocap_parts = vec![];
+                    if !self.mocap_heap.is_empty() {
+                        // extract all of the mocap packets from the heap in order, and pull them into
+                        while let Some(Reverse(x)) = self.mocap_heap.pop() {
+                            mocap_parts.push(x)
+                        }
+                    }
+
+                    if let Err(e) = self.combined_out.send(VRTPPacket::Raw(mocap_parts, None)).await {
+                        error!("Failed to send to sync out: channel likely closed ({e})");
+                        break;
+                    }
+                }
+
+            }
+
 
             // more analytics
             if n_packets_through % 500 == 0 {
@@ -177,9 +198,6 @@ impl Synchronizer {
             if n_audio_packets > 0 {
                 trace!("Average audio timestamp difference is {}", (audio_duration_ts / n_audio_packets) as f64);
             }
-
         }
-
     }
-
 }

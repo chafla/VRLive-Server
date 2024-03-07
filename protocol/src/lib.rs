@@ -10,6 +10,7 @@ pub mod handshake;
 pub mod backing_track;
 pub mod heartbeat;
 pub mod synchronizer;
+mod vrm_packet;
 
 pub type UserIDType = u16;
 

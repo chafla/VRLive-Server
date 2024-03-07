@@ -1,11 +1,13 @@
 use std::cmp::Ordering;
+use std::mem::size_of;
 
 use bytes::{BufMut, Bytes, BytesMut};
 use log::error;
-use rosc::{OscBundle, OscPacket};
+use rosc::{OscBundle, OscPacket, OscTime};
 use rosc::encoder::encode;
 use webrtc::rtp::packet::Packet;
 use webrtc::util::Marshal;
+use crate::osc_messages_out::{PerformerServerMessage, ServerMessage};
 
 /// Metadata about the current RTP stream.
 #[derive(Copy, Clone, Debug)]
@@ -45,6 +47,7 @@ impl RTPPacket {
     }
 
     /// Raw timestamp since zero time
+    /// TODO figure out how this corresponds to the sample rate of the audio
     pub fn raw_timestamp(&self) -> u32 {
         self.packet.header.timestamp + self.meta.zero_time
     }
@@ -139,7 +142,7 @@ impl PartialOrd for OscData {
 #[derive(Debug, Clone)]
 pub enum VRTPPacket {
     Encoded(Bytes),
-    Raw(Vec<OscData>, RTPPacket)
+    Raw(Vec<OscData>, Option<RTPPacket>)
 }
 
 impl TryInto<Bytes> for VRTPPacket {
@@ -149,14 +152,45 @@ impl TryInto<Bytes> for VRTPPacket {
         match self {
             VRTPPacket::Encoded(b) => Ok(b),
             VRTPPacket::Raw(osc_messages, rtp) => {
-                let mut bytes_out = BytesMut::with_capacity(1400 + 16);
+
+                // let mut first_timestamp: Option<OscTime> = None;
+
+                let audio_size = match &rtp {
+                    Some(pkt) => pkt.packet.payload.len(),
+                    None => 0,
+                };
+
+                // let mut first_timestamp = match rtp {
+                //     Some(ref pkt) => Some((0, pkt.raw_timestamp()).into()),
+                //     None => None,
+                // };
+
+                let mut first_timestamp = None;
+
+                let mut bytes_out = BytesMut::with_capacity(5000);
                 // let osc_bytes = encode(&osc).unwrap();
                 let mut osc_bytes = BytesMut::new();
+                let mut bundle_packets : Vec<OscPacket> = vec![];
                 for osc in osc_messages.into_iter() {
+                    if (first_timestamp.is_none()) {
+                        first_timestamp = Some(*&osc.bundle.timetag)
+                    }
                     let pkt = OscPacket::Bundle(osc.bundle);
-                    let bundle = encode(&pkt).unwrap();
-                    osc_bytes.put(bundle.as_slice())
+
+                    bundle_packets.push(pkt);
+
+                    // let bundle = encode(&pkt).unwrap();
                 }
+
+                if (bundle_packets.len() == 0 && rtp.is_none()) {
+                    return Err("No data to process!".into())
+                }
+                let outer_bundle = OscBundle {
+                    timetag: first_timestamp.unwrap(),
+                    content: bundle_packets
+                };
+                let bundle_packed = encode(&OscPacket::Bundle(outer_bundle)).unwrap();
+                osc_bytes.put(bundle_packed.as_slice());
                 let osc_size = osc_bytes.len();
 
 
@@ -171,23 +205,33 @@ impl TryInto<Bytes> for VRTPPacket {
                 //         return Err(e.to_string());
                 //     }
                 // };
-                let audio_size = rtp.packet.payload.len();
 
-                let pkt_size = audio_size + osc_size + 2;
+
+                let pkt_size = audio_size + osc_size + 2 + 2 + 4;
 
                 // provide two bytes for the size of our total payload
 
                 // TODO find a way to ensure packets don't exceed mtu
                 // assert!(pkt_size < 1400);
 
+
+
                 // let mut bytes_out = BytesMut::with_capacity(pkt_size);
                 // preface with the total sizes
-                bytes_out.put_u16(pkt_size as u16);
+                bytes_out.put_u32(pkt_size as u32);
                 bytes_out.put_u16(osc_size as u16);
                 bytes_out.put_u16(audio_size as u16);
 
+                // dbg!(&osc_bytes);
+
                 bytes_out.put(osc_bytes);
-                bytes_out.put(&rtp.packet.payload[..]);
+
+                assert_eq!(pkt_size, bytes_out.len());
+
+                if let Some(pkt) = &rtp {
+                    bytes_out.put(&pkt.packet.payload[..]);
+                }
+
 
 
 
@@ -220,4 +264,34 @@ impl TryInto<Bytes> for VRTPPacket {
             }
         }
     }
+}
+
+// pub struct CompressedOscMessage {
+//
+// }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn try_decode_packet() {
+        // todo
+    }
+    // fn try_create_server_message() {
+    //     let message = ServerMessage::Performer(PerformerServerMessage::Ready(true));
+    //
+    //     let encoded = message.to_message(vec!["".to_owned()]);
+    //     let unencoded = ServerMessage::from_osc_message(&encoded);
+    //     dbg!(&unencoded);
+    //     if let Some(server_msg) = &unencoded {
+    //         let reencoded = server_msg.to_message(vec!["".to_owned()]);
+    //         let reunencoded = ServerMessage::from_osc_message(&reencoded);
+    //         assert_eq!(reencoded.addr, encoded.addr);
+    //         assert_eq!(&reunencoded, &unencoded);
+    //     }
+    //     else {
+    //         panic!("Object was not re-encoded")
+    //     }
+    // }
 }
