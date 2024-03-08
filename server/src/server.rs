@@ -422,7 +422,7 @@ impl Server {
     }
 
     async fn start_performer_audio_listener(&self) {
-        let audio_in_addr = SocketAddrV4::new(("127.0.0.1").parse().unwrap(), self.port_map.performer_audio_in);
+        let audio_in_addr = SocketAddrV4::new(("0.0.0.0").parse().unwrap(), self.port_map.performer_audio_in);
         let users_by_ip = Arc::clone(&self.clients_by_ip);
         tokio::spawn(async move {
             Self::performer_audio_listener(&audio_in_addr, users_by_ip).await.unwrap();
@@ -430,7 +430,7 @@ impl Server {
     }
 
     async fn start_performer_mocap_listener(&self) {
-        let audio_in_addr = SocketAddrV4::new(("127.0.0.1").parse().unwrap(), self.port_map.performer_mocap_in);
+        let audio_in_addr = SocketAddrV4::new(("0.0.0.0").parse().unwrap(), self.port_map.performer_mocap_in);
         let users_by_ip = Arc::clone(&self.clients_by_ip);
         tokio::spawn(async move {
             Self::performer_mocap_listener(&audio_in_addr, users_by_ip).await.unwrap();
@@ -942,7 +942,7 @@ impl Server {
             let performer_listener = match users_by_ip.read().await.get(&incoming_addr.ip().to_string()) {
                 None => {
                     if (Instant::now() - last_notice).as_secs() > 5 {
-                        trace!("Got performer mocap data from someone who we haven't handshaked with!");
+                        debug!("Got performer mocap data from someone who we haven't handshaked with!");
                         last_notice = Instant::now();
                     }
 

@@ -142,6 +142,7 @@ pub trait VRLClient {
             T: Send + Sync + TryInto<Bytes>
     {
         let sock = UdpSocket::bind(SocketAddrV4::new("0.0.0.0".parse().unwrap(), 0)).await.unwrap();
+        // sock.connect(&target_addr).await.unwrap();
         info!("Client transmitter for {label} is now active.");
         let mut sent_once = false;
         loop {

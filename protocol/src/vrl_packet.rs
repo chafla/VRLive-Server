@@ -8,7 +8,7 @@ use rosc::encoder::encode;
 use webrtc::rtp::packet::Packet;
 use webrtc::util::Marshal;
 use crate::osc_messages_out::{PerformerServerMessage, ServerMessage};
-use crate::vrm_packet::convert_to_vrm_ligeia;
+use crate::vrm_packet::{convert_to_vrm_base, convert_to_vrm_ligeia};
 
 /// Metadata about the current RTP stream.
 #[derive(Copy, Clone, Debug)]
@@ -190,7 +190,7 @@ impl TryInto<Bytes> for VRTPPacket {
                     timetag: first_timestamp.unwrap(),
                     content: bundle_packets
                 };
-                let outer_bundle = convert_to_vrm_ligeia(&outer_bundle);
+                let outer_bundle = convert_to_vrm_base(&outer_bundle);
                 let bundle_packed = encode(&OscPacket::Bundle(outer_bundle)).unwrap();
                 osc_bytes.put(bundle_packed.as_slice());
                 let osc_size = osc_bytes.len();
