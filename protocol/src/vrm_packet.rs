@@ -88,6 +88,7 @@ fn slime_id_to_body_part<T>(message: &OscMessage, id_mapping: T) -> Result<Slime
 
 }
 
+/// The base IDs that unity uses for objects.
 fn base_vrm_id(id: u32) -> &'static str {
     match id {
         // these just need to match bones in unity

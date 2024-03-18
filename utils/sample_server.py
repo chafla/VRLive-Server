@@ -5,17 +5,33 @@ import json
 import sys
 import threading
 import time
+import traceback
 from os import path
+
+import opus_streamer
+
+import osc4py3
 import pythonosc.osc_packet
 from pythonosc import parsing
 from osc4py3.oscbuildparse import decode_packet
 
+import rtp
+
+rtp_reader = rtp.RTP(
+    marker=True
+)
+
+terminating = threading.Event()
 
 performer_mocap_queue = queue.Queue()
+performer_audio_queue = queue.Queue()
 
-HOST = "localhost"  # The server's hostname or IP address
+HOST = "localhost"
+# HOST = "129.21.149.239"  # The server's hostname or IP address
 # PORT = 5653  # The port used by the server
-OSC_IN_HOST = "129.21.149.239"
+# OSC_IN_HOST = "129.21.149.239"
+OSC_IN_HOST = "localhost"
+
 
 remote_ports = {
     "new_connection": 5653,
@@ -77,7 +93,7 @@ def server_event_thread():
         # conn, addr = s.accept()
         # with conn:
         #     while True:
-        while True:
+        while not terminating.is_set():
             data = s.recv(300)
             if not data:
                 print("EOF")
@@ -95,7 +111,7 @@ def client_event_thread():
         # s.listen()
         # conn, addr = s.accept()
         # with conn:
-        while True:
+        while not terminating.is_set():
             pass
         #     while True:
         #         data = conn.recv(300)
@@ -107,25 +123,25 @@ def vrtp_in_thread():
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         s.bind((HOST, ports["vrtp_data"]))
         print("Bound for vrtp")
-        audio_file = open("audio_out.ogg", "wb")
+
         mocap_file = open("mocap_out.osc", "wb")
-        while True:
+        while not terminating.is_set():
             data = s.recv(50000)
-            deconstruct_vrtp(data, audio_file, mocap_file, osc_out)
+            deconstruct_vrtp(data, mocap_file, osc_out)
 
             # print("VRTP data in")
 
 def mocap_in_thread():
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         s.bind((HOST, ports["audience_motion_capture"]))
-        while True:
+        while not terminating.is_set():
             data = s.recv(2048)
             osc_out.send(data)
             print("audience mocap data in")
 
 packets_in = 0
 
-def deconstruct_vrtp(pkt_in: bytes, audio_file, mocap_file, mocap_sock):
+def deconstruct_vrtp(pkt_in: bytes, mocap_file, mocap_sock):
     total_pl_size = int.from_bytes(pkt_in[0:4], "big")
     osc_size = int.from_bytes(pkt_in[4:6], "big")
     audio_size = int.from_bytes(pkt_in[6:8], "big")
@@ -133,7 +149,9 @@ def deconstruct_vrtp(pkt_in: bytes, audio_file, mocap_file, mocap_sock):
     audio_data = pkt_in[8+osc_size:]
     # decoder = pyogg.opus.OpusDecoder()
     # res = pyogg.opus.opus_decode(decoder, audio_data, audio_size, )
-    audio_file.write(audio_data)
+    # audio_file.write(audio_data)
+    if audio_data:
+        performer_audio_queue.put(audio_data)
     mocap_file.write(osc_data)
     if osc_data:
         # list comps my beloved
@@ -150,12 +168,39 @@ def deconstruct_vrtp(pkt_in: bytes, audio_file, mocap_file, mocap_sock):
     # print("a")
 
 def vrtp_mocap_relay():
-    while True:
+    while not terminating.is_set():
         mocap_data = performer_mocap_queue.get()
         osc_out.send(mocap_data)
         # data = decode_packet(mocap_data)
         # print("guh")
 
+def vrtp_audio_conv():
+    dec = opus_streamer.opuslib.Decoder(48000, 2)
+    with open("audio_out.ogg", "ab") as audio_file:
+        while not terminating.is_set():
+            audio_data = performer_audio_queue.get()
+            # audio_file.write(audio_data)
+            try:
+                pcm = dec.decode(audio_data, 960, False)
+                audio_file.write(pcm)
+            except OSError as e:
+
+                traceback.print_exc()
+                print("GUH")
+
+            # osc_out.send(mocap_data)
+            # data = decode_packet(mocap_data)
+            # print("guh")
+
+
+def audio_out_thread():
+    # Sending audio out to the target
+    streamer = opus_streamer.WaveToOpus("howd_i_wind_up_here.wav")
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.connect((HOST, remote_ports["performer_audio"]))
+        while not terminating.is_set():
+            s.send(streamer.get_next_packet().toBytes())
+            # print("Sending audio")
 
 
 def backing_track_thread():
@@ -167,7 +212,7 @@ def backing_track_thread():
         # s.listen()
         # conn, addr = s.accept()
         # with conn:
-        while True:
+        while not terminating.is_set():
             data = s.recv(8)
             if data == b'NEWTRACK':
                 header_len = int.from_bytes(s.recv(2), "big")
@@ -199,10 +244,17 @@ def main():
     threading.Thread(target=mocap_in_thread).start()
     threading.Thread(target=vrtp_in_thread).start()
     threading.Thread(target=vrtp_mocap_relay).start()
+    threading.Thread(target=audio_out_thread).start()
+    threading.Thread(target=vrtp_audio_conv).start()
 
 
 if __name__ == '__main__':
     main()
-    while True:
-        time.sleep(5)
+    try:
+
+        while True:
+            time.sleep(5)
+    except KeyboardInterrupt:
+        terminating.set()
+        print("killing")
 

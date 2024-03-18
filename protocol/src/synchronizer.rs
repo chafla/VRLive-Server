@@ -13,7 +13,7 @@ use webrtc::rtp::packet::Packet as Packet;
 use crate::vrl_packet::{OscData, RTPPacket, RTPStreamInfo, VRTPPacket};
 
 
-static AUDIO_TIMEOUT: Duration = Duration::from_millis(50);
+static AUDIO_TIMEOUT: Duration = Duration::from_millis(100);
 // use crate::VRTPPacket;
 
 pub struct Synchronizer {
@@ -161,20 +161,27 @@ impl Synchronizer {
 
             }
             if try_to_send {
-                if let Some(Reverse(audio_pkt)) = self.audio_heap.pop() {
-                    let mut mocap_parts = vec![];
-                    if !self.mocap_heap.is_empty() {
-                        // extract all of the mocap packets from the heap in order, and pull them into
-                        while let Some(Reverse(x)) = self.mocap_heap.pop() {
-                            mocap_parts.push(x)
-                        }
-                    }
-
-                    if let Err(e) = self.combined_out.send(VRTPPacket::Raw(mocap_parts, None)).await {
-                        error!("Failed to send to sync out: channel likely closed ({e})");
-                        break;
+                let audio_packet = match self.audio_heap.pop() {
+                    Some(Reverse(p)) => Some(p),
+                    None => None,
+                };
+                dbg!(&audio_packet);
+                // if let Some(Reverse(audio_pkt)) = self.audio_heap.pop() {
+                let mut mocap_parts = vec![];
+                if !self.mocap_heap.is_empty() {
+                    // extract all of the mocap packets from the heap in order, and pull them into
+                    while let Some(Reverse(x)) = self.mocap_heap.pop() {
+                        mocap_parts.push(x)
                     }
                 }
+
+                if let Err(e) = self.combined_out.send(VRTPPacket::Raw(mocap_parts, audio_packet)).await {
+                    error!("Failed to send to sync out: channel likely closed ({e})");
+                    break;
+                }
+                try_to_send = false;
+                // }
+
 
             }
 

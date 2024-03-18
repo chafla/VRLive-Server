@@ -139,7 +139,7 @@ pub trait VRLClient {
     /// Utility transmitter that consumes data from a channel and transmits it out over a UDP socket.
     async fn client_transmitter<T>(mut incoming_data_chan: Receiver<T>, target_addr: SocketAddr, label: &'static str)
         where
-            T: Send + Sync + TryInto<Bytes>
+            T: Send + Sync + TryInto<Bytes> + std::fmt::Debug
     {
         let sock = UdpSocket::bind(SocketAddrV4::new("0.0.0.0".parse().unwrap(), 0)).await.unwrap();
         // sock.connect(&target_addr).await.unwrap();
@@ -161,9 +161,11 @@ pub trait VRLClient {
 
             trace!("{label} client transmitter sending data out to {}!", &target_addr);
 
+            // dbg!(&msg);
             let msg_bytes = match msg.try_into() {
                 Ok(b) => b,
                 Err(e) => {
+                    debug!("Got no bytes -- the packet seems empty");
                     continue;
                 }
             };

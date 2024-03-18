@@ -1,14 +1,12 @@
 use std::cmp::Ordering;
-use std::mem::size_of;
 
 use bytes::{BufMut, Bytes, BytesMut};
-use log::error;
 use rosc::{OscBundle, OscPacket, OscTime};
 use rosc::encoder::encode;
 use webrtc::rtp::packet::Packet;
 use webrtc::util::Marshal;
-use crate::osc_messages_out::{PerformerServerMessage, ServerMessage};
-use crate::vrm_packet::{convert_to_vrm_base, convert_to_vrm_ligeia};
+
+use crate::vrm_packet::convert_to_vrm_base;
 
 /// Metadata about the current RTP stream.
 #[derive(Copy, Clone, Debug)]
@@ -47,10 +45,24 @@ impl RTPPacket {
         }
     }
 
+    pub fn sample_rate(&self) -> u32 {
+        48000  // FIXME AAARGGHH
+    }
+
     /// Raw timestamp since zero time
     /// TODO figure out how this corresponds to the sample rate of the audio
-    pub fn raw_timestamp(&self) -> u32 {
+    pub fn timestamp(&self) -> u32 {
         self.packet.header.timestamp + self.meta.zero_time
+    }
+
+    pub fn osc_timestamp(&self) -> OscTime {
+        // get the current clip's duration in seconds
+
+        let current_song_duration = self.timestamp() as f64 / self.sample_rate() as f64;
+
+        return (0, 0).into()
+
+
     }
 
     pub fn packet(&self) -> &Packet {
@@ -161,12 +173,12 @@ impl TryInto<Bytes> for VRTPPacket {
                     None => 0,
                 };
 
-                // let mut first_timestamp = match rtp {
-                //     Some(ref pkt) => Some((0, pkt.raw_timestamp()).into()),
-                //     None => None,
-                // };
+                let mut first_timestamp: Option<OscTime> = None;
 
-                let mut first_timestamp = None;
+                if let Some(pkt) = &rtp {
+                    // TODO deal with this sample rate
+                    first_timestamp = Some(pkt.osc_timestamp())
+                }
 
                 let mut bytes_out = BytesMut::with_capacity(5000);
                 // let osc_bytes = encode(&osc).unwrap();
@@ -183,8 +195,15 @@ impl TryInto<Bytes> for VRTPPacket {
                     // let bundle = encode(&pkt).unwrap();
                 }
 
-                if (bundle_packets.len() == 0 && rtp.is_none()) {
+
+                if bundle_packets.len() == 0 && rtp.is_none() {
                     return Err("No data to process!".into())
+                }
+
+                if first_timestamp.is_none() {
+                    // we don't have any timestamps???
+                    // TODO find out how we best want to handle this???
+                    panic!("No timestamp, but we have packets of some kind!")
                 }
                 let outer_bundle = OscBundle {
                     timetag: first_timestamp.unwrap(),
@@ -209,6 +228,8 @@ impl TryInto<Bytes> for VRTPPacket {
                 // };
 
 
+                // 4 from
+                // 2 - 16 bit
                 let pkt_size = audio_size + osc_size + 2 + 2 + 4;
 
                 // provide two bytes for the size of our total payload
@@ -228,11 +249,12 @@ impl TryInto<Bytes> for VRTPPacket {
 
                 bytes_out.put(osc_bytes);
 
-                assert_eq!(pkt_size, bytes_out.len());
-
                 if let Some(pkt) = &rtp {
                     bytes_out.put(&pkt.packet.payload[..]);
                 }
+
+                assert_eq!(pkt_size, bytes_out.len());
+
 
 
 
