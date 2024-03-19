@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use rosc::OscBundle;
 use tokio::net::TcpStream;
@@ -29,6 +30,7 @@ pub struct Performer
     rtp_stream: Option<Arc<RTPSenderOut<SynchronizerData>>>,
     // webRTC stuff
     signaling_channel: TcpStream,
+    active: Arc<AtomicBool>,
 
     // internal channels
     /// Channels necessary for the synchronizer.
@@ -70,6 +72,7 @@ impl Performer {
             sync_channels: None,
             streaming_connection: None,
             rtp_stream: None,
+            active: Arc::new(AtomicBool::new(true))
             // synchronizer: Synchronizer::new()
         }
     }
@@ -100,6 +103,7 @@ impl Performer {
             sync_channels: Some((osc_rx, audio_rx)),
             streaming_connection: Some(Arc::new(incoming)),
             rtp_stream: None,
+            active: Arc::new(AtomicBool::new(true))
             // synchronizer: Synchronizer::new()
         }
     }
@@ -191,5 +195,9 @@ impl VRLClient for Performer {
 
     fn user_data(&self) -> &UserData {
         &self.user_data
+    }
+
+    fn active(&self) -> &Arc<AtomicBool> {
+        &self.active
     }
 }

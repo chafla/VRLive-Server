@@ -165,7 +165,6 @@ impl Synchronizer {
                     Some(Reverse(p)) => Some(p),
                     None => None,
                 };
-                dbg!(&audio_packet);
                 // if let Some(Reverse(audio_pkt)) = self.audio_heap.pop() {
                 let mut mocap_parts = vec![];
                 if !self.mocap_heap.is_empty() {

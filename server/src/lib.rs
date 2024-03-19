@@ -2,6 +2,7 @@ use webrtc::rtp::packet::Packet;
 
 pub mod server;
 pub mod client;
+mod analytics;
 
 
 /// Maximum buffer size for the channel before we start to block

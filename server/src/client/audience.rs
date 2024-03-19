@@ -1,3 +1,5 @@
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use tokio::net::TcpStream;
 use protocol::handshake::ClientPortMap;
 
@@ -9,7 +11,8 @@ pub struct AudienceMember {
     user_data: UserData,
     base_channels: ClientChannelData,
     ports: ClientPortMap,
-    signaling_channel: TcpStream
+    signaling_channel: TcpStream,
+    active: Arc<AtomicBool>,
 }
 
 impl AudienceMember {
@@ -23,7 +26,7 @@ impl AudienceMember {
             base_channels,
             ports,
             signaling_channel,
-
+            active: Arc::new(AtomicBool::new(true)),
         }
     }
 }
@@ -43,5 +46,9 @@ impl VRLClient for AudienceMember {
 
     fn user_data(&self) -> &UserData {
         &self.user_data
+    }
+
+    fn active(&self) -> &Arc<AtomicBool> {
+        &self.active
     }
 }

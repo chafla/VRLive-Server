@@ -1,4 +1,7 @@
 use std::net::{SocketAddr, SocketAddrV4};
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::{Bytes};
@@ -73,6 +76,8 @@ pub trait VRLClient {
     fn channels_mut(&mut self) -> &mut ClientChannelData;
 
     fn user_data(&self) -> &UserData;
+
+    fn active(&self) -> &Arc<AtomicBool>;
 
     // async fn start_custom_channels(&mut self);
 
@@ -224,69 +229,6 @@ pub trait VRLClient {
 
     }
 
-    // async fn sock_listener(mut stream_sock: Receiver<TcpStream>, label: &str) {
-    //     let mut client_stream = match stream_sock.recv().await {
-    //         None => {
-    //             warn!("{label} Server event listener never received a stream before the channel closed.");
-    //             return;
-    //         },
-    //         Some(s) => s
-    //     };
-    //
-    //     loop {
-    //         tokio::select! {
-    //             biased;
-    //             new_sock = stream_sock.recv() => {
-    //                 match new_sock {
-    //                     None => {
-    //                         warn!("{label} Client stream is closed, shutting down event sender");
-    //                         break;
-    //                     },
-    //                     Some(s) => {
-    //                         info!("Server event stream has been updated!");
-    //                         client_stream = s;
-    //                     }
-    //                 }
-    //             },
-    //             server_msg = sender_in.recv() => {
-    //                 // our server has been killed!
-    //                 if let None = server_msg {
-    //                     // debug!("Server event listener for {0} has been destroyed.", &user_data.fancy_title);
-    //                     break;
-    //                 }
-    //
-    //                 let msg = server_msg.unwrap().encode();
-    //                 let msg = OscPacket::Message(msg);
-    //
-    //                 let packet = encoder::encode(&msg);
-    //
-    //                 if let Err(e) = &packet {
-    //                     warn!("{label} Failed to encode osc message {0:?}: {e}", &msg);
-    //                     continue;
-    //                 }
-    //
-    //                 let packet = packet.unwrap();
-    //
-    //                 let sent = client_stream.write(&packet).await;
-    //
-    //                 match sent {
-    //                     Ok(_) => {
-    //                         debug!("{label} Sent a packet {0:?}", &packet);
-    //                     }
-    //                     Err(e) => {
-    //                         warn!("{label} Failed to send packet: {e}");
-    //                         // if we fail sending, we'll just have to mark this as terminated.
-    //                         // loop back around to try for another listener.
-    //                         continue;
-    //                     }
-    //                 }
-    //             }
-    //         }
-    //     }
-    //
-    //     // let mut client_stream = client_stream.unwrap();
-    // }
-
     // note that, yes, a lot of this code is duplicated, mostly because async closures are unstable
 
     /// Thread which receives events from a channel and forwards them onto a tcp stream
@@ -376,6 +318,8 @@ pub trait VRLClient {
             Some(s) => s
         };
 
+
+
         let mut client_event_buf: [u8; 1024];
 
             // TODO AFTER BREAK
@@ -403,12 +347,16 @@ pub trait VRLClient {
                         },
                         Ok(b) => b
                     };
+                    if incoming_bytes == 0 {
+                        // we probably lost connection, let's wait for it to clear
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
                     let read_bytes = &client_event_buf[0..incoming_bytes];
                     trace!("{label} got {incoming_bytes} bytes");
 
                     let res = rosc::decoder::decode_tcp_vec(read_bytes);
                     if res.is_err() {
-                        warn!("{label} channel got an invalid data stream!");
+                        warn!("{label} channel got an invalid data stream of {incoming_bytes}!");
                         continue;
                     }
                     let (rest, packets) = res.unwrap();
@@ -434,16 +382,6 @@ pub trait VRLClient {
         info!("{label} shutting down");
 
     }
-
-    // async fn streamed_audio_listener(audio_out: Sender<Packet>, socket_addr: SocketAddr) {
-    //     let mut sock = UdpSocket::bind(socket_addr).await.unwrap();
-    //
-    //     loop {
-    //         let data_in = sock.recv_from()
-    //     }
-    //
-    //
-    // }
 
     // async fn combined_performer_data_out(&self, mut stream_channel: Receiver<Bytes>, client_socket: SocketAddrV4) {
     //     'outer: loop {
