@@ -21,6 +21,8 @@ rtp_reader = rtp.RTP(
     marker=True
 )
 
+send_audio = True
+
 terminating = threading.Event()
 
 performer_mocap_queue = queue.Queue()
@@ -30,7 +32,7 @@ HOST = "localhost"
 # HOST = "129.21.149.239"  # The server's hostname or IP address
 # PORT = 5653  # The port used by the server
 # OSC_IN_HOST = "129.21.149.239"
-OSC_IN_HOST = "localhost"
+OSC_IN_HOST = "127.0.0.1"
 
 
 remote_ports = {
@@ -175,10 +177,15 @@ def vrtp_mocap_relay():
         # print("guh")
 
 def vrtp_audio_conv():
-    dec = opus_streamer.opuslib.Decoder(48000, 2)
-    with open("audio_out.ogg", "ab") as audio_file:
+    if send_audio:
+        dec = opus_streamer.opuslib.Decoder(48000, 1)
+    else:
+        dec = opus_streamer.opuslib.Decoder(48000, 2)
+    with open("audio_out.wav", "ab") as audio_file:
         while not terminating.is_set():
             audio_data = performer_audio_queue.get()
+            if not audio_data:
+                print("Empty audio packet received")
             # audio_file.write(audio_data)
             try:
                 pcm = dec.decode(audio_data, 960, False)
@@ -194,6 +201,8 @@ def vrtp_audio_conv():
 
 
 def audio_out_thread():
+    if not send_audio:
+        return
     # Sending audio out to the target
     streamer = opus_streamer.WaveToOpus("howd_i_wind_up_here.wav")
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:

@@ -46,7 +46,7 @@ impl RTPPacket {
     }
 
     pub fn sample_rate(&self) -> u32 {
-        48000  // FIXME AAARGGHH
+        48000  // FIXME AAARGGHH THIS SHOULD NOT BE HARDCODED BUT SHOULD INSTEAD COME FROM THE HANDSHAKE
     }
 
     /// Raw timestamp since zero time
@@ -58,6 +58,9 @@ impl RTPPacket {
     pub fn osc_timestamp(&self) -> OscTime {
         // get the current clip's duration in seconds
 
+        // TODO
+        // assuming the timestamp is counted in terms of samples since the song began
+        // though since we mostly control the 
         let current_song_duration = self.timestamp() as f64 / self.sample_rate() as f64;
 
         return (0, 0).into()
