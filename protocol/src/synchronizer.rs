@@ -1,17 +1,14 @@
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
-use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration};
 
 use log::{debug, error, info, trace, warn};
 use rosc::OscBundle;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::sync::Mutex;
 use tokio::time::Instant;
 use webrtc::rtp::packet::Packet as Packet;
 
 use crate::vrl_packet::{OscData, RTPPacket, RTPStreamInfo, VRTPPacket};
-
 
 static AUDIO_TIMEOUT: Duration = Duration::from_millis(100);
 // use crate::VRTPPacket;
@@ -57,13 +54,13 @@ impl Synchronizer {
         let mut n_packets_through = 0;
         let mut last_time = Instant::now();
 
-        let mut last_audio_timestamp = 0;
-        let mut audio_duration_ts = 0;
-        let mut n_audio_packets = 0;
-
-        let mut last_mocap_timestamp = 0;
-        let mut mocap_duration_ts = 0;
-        let mut n_mocap_packets = 0;
+        // let mut last_audio_timestamp = 0;
+        // let mut audio_duration_ts = 0;
+        // let mut n_audio_packets = 0;
+        // 
+        // let mut last_mocap_timestamp = 0;
+        // let mut mocap_duration_ts = 0;
+        // let mut n_mocap_packets = 0;
 
         let mut try_to_send = false;
         loop {
@@ -72,7 +69,7 @@ impl Synchronizer {
                 audio_m = tokio::time::timeout(AUDIO_TIMEOUT, audio_in.recv()) => {
                     match audio_m {
                         Err(e) => {
-                            debug!("Audio data timed out, sending mocap data anyway");
+                            debug!("Audio data timed out after {e}, sending mocap data anyway");
                             // Timed out, but we didn't get any audio data...
                             // in the meantime, send what mocap data we have
                             try_to_send = true;
@@ -200,10 +197,10 @@ impl Synchronizer {
             last_time = cur_time;
 
 
-            trace!("Average packet time is currently {}ms", (durs_micro / n_packets_through) as f64);
-            if n_audio_packets > 0 {
-                trace!("Average audio timestamp difference is {}", (audio_duration_ts / n_audio_packets) as f64);
-            }
+            // trace!("Average packet time is currently {}ms", (durs_micro / n_packets_through) as f64);
+            // if n_audio_packets > 0 {
+            //     trace!("Average audio timestamp difference is {}", (audio_duration_ts / n_audio_packets) as f64);
+            // }
         }
     }
 }

@@ -9,6 +9,3 @@ mod analytics;
 const MAX_CHAN_SIZE: usize = 2 << 12;
 
 type AudioPacket = Packet;  // TODO
-
-
-// type VRTPPacket = (Vec<OscData>, RTPPacket);

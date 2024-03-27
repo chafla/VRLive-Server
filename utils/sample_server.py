@@ -21,7 +21,14 @@ rtp_reader = rtp.RTP(
     marker=True
 )
 
-send_audio = True
+# if true, we're sending audio elsewhere, not to ourselves
+send_audio = False
+
+# if true, we don't want to bind to the local audio/mocap input ports, and just want to send
+dont_listen_locally = True
+
+if not dont_listen_locally:
+    print("Warning warning warning, we're consuming UDP packets!")
 
 terminating = threading.Event()
 
@@ -29,10 +36,12 @@ performer_mocap_queue = queue.Queue()
 performer_audio_queue = queue.Queue()
 
 HOST = "localhost"
+REMOTE = "localhost"
 # HOST = "129.21.149.239"  # The server's hostname or IP address
 # PORT = 5653  # The port used by the server
 # OSC_IN_HOST = "129.21.149.239"
-OSC_IN_HOST = "127.0.0.1"
+OSC_IN_HOST = "localhost"
+OSC_OUT_HOST = "localhost"
 
 
 remote_ports = {
@@ -46,7 +55,9 @@ remote_ports = {
 }
 
 osc_out = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-osc_out.connect((OSC_IN_HOST, 9050))
+osc_out.connect((OSC_OUT_HOST, 9050))
+
+# audio_out = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
 try:
     port_offset = int(sys.argv[1])
@@ -59,7 +70,7 @@ ports = {
     "server_event": 6101 + port_offset,
     "audience_motion_capture": 6102 + port_offset,
     "extra_ports": {},
-    "vrtp_data": 6103 + port_offset
+    "vrtp_data": 6105 + port_offset
 }
 
 synack_resp = {
@@ -75,7 +86,7 @@ remote_host = None
 
 def handshake():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.connect((HOST, remote_ports["new_connection"]))
+        s.connect((REMOTE, remote_ports["new_connection"]))
         # s.sendall(b"Hello, world")
         data = s.recv(1024)
         print(f"Received {data!r}")
@@ -89,7 +100,7 @@ def handshake():
 def server_event_thread():
     # prep to send events
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.connect((HOST, remote_ports["server_event_sock"]))
+        s.connect((REMOTE, remote_ports["server_event_sock"]))
         # s.accept()
         # s.listen()
         # conn, addr = s.accept()
@@ -107,7 +118,7 @@ def server_event_thread():
 def client_event_thread():
     # prep to send events
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.connect((HOST, remote_ports["client_event"]))
+        s.connect((REMOTE, remote_ports["client_event"]))
         s.send(b"aaaaaaaaaaaaaa")
         # s.accept()
         # s.listen()
@@ -121,14 +132,15 @@ def client_event_thread():
 
 
 def vrtp_in_thread():
-
+    if dont_listen_locally:
+        return
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         s.bind((HOST, ports["vrtp_data"]))
         print("Bound for vrtp")
 
         mocap_file = open("mocap_out.osc", "wb")
         while not terminating.is_set():
-            data = s.recv(50000)
+            data = s.recv(2048)
             deconstruct_vrtp(data, mocap_file, osc_out)
 
             # print("VRTP data in")
@@ -183,7 +195,10 @@ def vrtp_audio_conv():
         dec = opus_streamer.opuslib.Decoder(48000, 2)
     with open("audio_out.wav", "ab") as audio_file:
         while not terminating.is_set():
+            print("aaaaaa")
             audio_data = performer_audio_queue.get()
+            # if send_audio:
+
             if not audio_data:
                 print("Empty audio packet received")
             # audio_file.write(audio_data)
@@ -215,7 +230,7 @@ def audio_out_thread():
 def backing_track_thread():
     # prep to send events
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.connect((HOST, remote_ports["backing_track_sock"]))
+        s.connect((REMOTE, remote_ports["backing_track_sock"]))
         # s.send(b"aaaaaaaaaaaaaa")
         # s.accept()
         # s.listen()
@@ -246,7 +261,6 @@ def backing_track_thread():
 
 def main():
     handshake()
-    # time.sleep(1)
     threading.Thread(target=server_event_thread).start()
     threading.Thread(target=client_event_thread).start()
     threading.Thread(target=backing_track_thread).start()

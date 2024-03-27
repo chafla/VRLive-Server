@@ -133,7 +133,7 @@ impl Performer {
     async fn setup_incoming_tracks(&self, webrtc_connection: Arc<WebRTPConnection>) {
         // What we could do is keep track of all the tracks that we've created, and store an associated callback fn alongside them.
         // We could then add a general conn.on_track handler that matches if the details of the new track are the same as one that we're already aware of.
-        webrtc_connection.peer_connection_ref().on_track(Box::new(move |track, rx, tx| {
+        webrtc_connection.peer_connection_ref().on_track(Box::new(move |track, _rx, _tx| {
             // handle incoming tracks
             // see docs for what these terms mean
             // ID is more of the general "kind" of stream (not unique, like 'audio' or 'video')
@@ -158,7 +158,7 @@ impl Performer {
     //     self.
     // }
 
-    async fn create_incoming_connection(title: &str, osc_to_sync: Sender<OscBundle>, audio_to_sync: Sender<AudioPacket>) -> anyhow::Result<WebRTPConnection> {
+    async fn create_incoming_connection(title: &str, osc_to_sync: Sender<OscBundle>, _audio_to_sync: Sender<AudioPacket>) -> anyhow::Result<WebRTPConnection> {
         let mut conn = WebRTPConnection::new("Performer incoming").await;
         register_performer_mocap_data_channel(&mut conn, osc_to_sync).await?;
 

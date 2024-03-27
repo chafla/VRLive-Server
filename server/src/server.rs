@@ -554,7 +554,7 @@ impl Server {
                     }
                 };
                 let late_channels_outer = Arc::clone(&late_chans_inner);
-                let server_event_sender_inner = server_event_sender_inner.clone();
+                // let server_event_sender_inner = server_event_sender_inner.clone();
                 // todo this should probably come out of create_server_data, find a good way to replicate that
                 let thread_data = thread_data.clone();
                 let clients_local = Arc::clone(&clients);
@@ -680,10 +680,10 @@ impl Server {
         }
     }
 
-    async fn handle_reconnect(server_data: &ServerUserData, user_data: &UserData) {
-        // user_data.
-
-    }
+    // async fn handle_reconnect(server_data: &ServerUserData, user_data: &UserData) {
+    //     // user_data.
+    // 
+    // }
 
 
     /// Perform the handshake. If this completes, it should add a new client.
@@ -812,7 +812,7 @@ impl Server {
         // return server_user_data
 
         // oh boy I'm a little worried about stress testing this
-        let mut client_channel_data = ClientChannelData {
+        let client_channel_data = ClientChannelData {
             server_events_out: Some(server_event_out_recv),
             client_events_in: server_thread_data.client_events_in_tx.clone(),
             backing_track_in: Some(backing_track_recv),

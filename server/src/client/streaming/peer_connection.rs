@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use bytes;
 use log::{debug, warn};
 use rosc::decoder::decode_udp;
 use rosc::{OscBundle, OscPacket};

@@ -4,7 +4,6 @@ use bytes::{BufMut, Bytes, BytesMut};
 use rosc::{OscBundle, OscPacket, OscTime};
 use rosc::encoder::encode;
 use webrtc::rtp::packet::Packet;
-use webrtc::util::Marshal;
 
 use crate::vrm_packet::convert_to_vrm_base;
 
@@ -188,14 +187,12 @@ impl TryInto<Bytes> for VRTPPacket {
                 let mut osc_bytes = BytesMut::new();
                 let mut bundle_packets : Vec<OscPacket> = vec![];
                 for osc in osc_messages.into_iter() {
-                    if (first_timestamp.is_none()) {
+                    if first_timestamp.is_none() {
                         first_timestamp = Some(*&osc.bundle.timetag)
                     }
                     let pkt = OscPacket::Bundle(osc.bundle);
 
                     bundle_packets.push(pkt);
-
-                    // let bundle = encode(&pkt).unwrap();
                 }
 
 
@@ -216,21 +213,7 @@ impl TryInto<Bytes> for VRTPPacket {
                 let bundle_packed = encode(&OscPacket::Bundle(outer_bundle)).unwrap();
                 osc_bytes.put(bundle_packed.as_slice());
                 let osc_size = osc_bytes.len();
-
-
-                // let mut audio_bytes = BytesMut::with_capacity(1400);
-                let mut audio_buf: [u8; 2048] = [0; 2048];
-                // audio_bytes.reserve()
-                // let audio_size = match rtp.packet.marshal_to(&mut audio_buf) {
-                //     Ok(s) => s,
-                //     Err(e) => {
-                //
-                //         error!("Failed to convert data into packet for output: {e}");
-                //         return Err(e.to_string());
-                //     }
-                // };
-
-
+                
                 // 4 from
                 // 2 - 16 bit
                 let pkt_size = audio_size + osc_size + 2 + 2 + 4;

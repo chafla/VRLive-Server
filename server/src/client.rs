@@ -169,7 +169,7 @@ pub trait VRLClient {
             // dbg!(&msg);
             let msg_bytes = match msg.try_into() {
                 Ok(b) => b,
-                Err(e) => {
+                Err(_) => {
                     debug!("Got no bytes -- the packet seems empty");
                     continue;
                 }
@@ -214,7 +214,7 @@ pub trait VRLClient {
                     // the fact we got something is nice
                     if let Err(e) = incoming_bytes {
                         warn!("{label} heartbeat returned an error: {e}!");
-                        heartbeat_status_out.send(Hangup(e.to_string())).await;
+                        heartbeat_status_out.send(Hangup(e.to_string())).await.unwrap();
                         break;
                     }
                     let incoming_msg = &sock_buf[0..incoming_bytes.unwrap()];
