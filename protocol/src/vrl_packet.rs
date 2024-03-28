@@ -5,7 +5,7 @@ use rosc::{OscBundle, OscPacket, OscTime};
 use rosc::encoder::encode;
 use webrtc::rtp::packet::Packet;
 
-use crate::vrm_packet::convert_to_vrm_base;
+use crate::vrm_packet::{convert_to_vrm_base, convert_to_vrm_do_nothing};
 
 /// Metadata about the current RTP stream.
 #[derive(Copy, Clone, Debug)]
@@ -186,6 +186,7 @@ impl TryInto<Bytes> for VRTPPacket {
                 // let osc_bytes = encode(&osc).unwrap();
                 let mut osc_bytes = BytesMut::new();
                 let mut bundle_packets : Vec<OscPacket> = vec![];
+                let already_vrm = false;
                 for osc in osc_messages.into_iter() {
                     if first_timestamp.is_none() {
                         first_timestamp = Some(*&osc.bundle.timetag)
@@ -209,11 +210,11 @@ impl TryInto<Bytes> for VRTPPacket {
                     timetag: first_timestamp.unwrap(),
                     content: bundle_packets
                 };
-                let outer_bundle = convert_to_vrm_base(&outer_bundle);
+                let outer_bundle = convert_to_vrm_do_nothing(&outer_bundle);
                 let bundle_packed = encode(&OscPacket::Bundle(outer_bundle)).unwrap();
                 osc_bytes.put(bundle_packed.as_slice());
                 let osc_size = osc_bytes.len();
-                
+
                 // 4 from
                 // 2 - 16 bit
                 let pkt_size = audio_size + osc_size + 2 + 2 + 4;

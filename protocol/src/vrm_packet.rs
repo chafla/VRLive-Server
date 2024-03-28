@@ -202,6 +202,10 @@ pub fn convert_to_vrm_base(b: &OscBundle) -> OscBundle {
     convert_to_vrm(b, &OutputMessageFormat::VRM, &base_vrm_id, &mut HashMap::new())
 }
 
+pub fn convert_to_vrm_do_nothing(b: &OscBundle) -> OscBundle {
+    b.clone()
+}
+
 /// Convert an osc bundle to the type that we expect, given the standard slimevr input.
 fn convert_to_vrm<T>(b: &OscBundle, as_format: &OutputMessageFormat, converter: &T, hm: &mut HashMap<SlimeVRTarget, VRMBoneData>) -> OscBundle
     where T: Fn(u32) -> &'static str
