@@ -11,7 +11,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::mpsc::{Receiver, Sender};
 
-use protocol::{OSCDecodable, OSCEncodable, UserData};
+use protocol::{OSCDecodable, OSCEncodable, UserData, VRLTCPPacket};
 use protocol::backing_track::BackingTrackData;
 use protocol::handshake::ClientPortMap;
 use protocol::heartbeat::HeartbeatStatus;
@@ -101,8 +101,14 @@ pub trait VRLClient {
                         warn!("{label} Failed to encode osc message {0:?}: {e}", &msg);
                         return Err("ah".into());
                     }
+                    
+                    let message_out = VRLTCPPacket::new(
+                        "BUNDLE",
+                        Bytes::new(),  // empty,
+                        Bytes::from(packet.unwrap())
+                    );
 
-                    Ok(Bytes::from(packet.unwrap()))
+                    Ok(message_out.into())
                 };
                 Self::tcp_stream_event_sender(server_sock_chan, server_event_sender, handler, &user_data.fancy_title).await
             });

@@ -69,10 +69,13 @@ impl Synchronizer {
                 audio_m = tokio::time::timeout(AUDIO_TIMEOUT, audio_in.recv()) => {
                     match audio_m {
                         Err(e) => {
-                            debug!("Audio data timed out after {e}, sending mocap data anyway");
-                            // Timed out, but we didn't get any audio data...
-                            // in the meantime, send what mocap data we have
-                            try_to_send = true;
+                            if !self.mocap_heap.is_empty() {
+                                debug!("Audio data timed out after {e}, but mocap pressure exists. sending mocap data anyway");
+                                // Timed out, but we didn't get any audio data...
+                                // in the meantime, send what mocap data we have
+                                try_to_send = true;
+                            }
+                            
                         },
                         Ok(audio) => {
                             match audio {

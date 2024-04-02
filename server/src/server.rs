@@ -316,7 +316,10 @@ impl Server {
                     println!("Possible commands are: {}", valid_commands.join(", "))
                 }
                 ("backing", Some(path)) => {
-                    let path = if path == "default" {"C:\\Users\\namen\\Music\\howd_i_wind_up_here.mp3"} else {path};
+                    let path = match path {
+                        "default" | "d" => "utils\\howd_i_wind_up_here.mp3",
+                        _ => path
+                    };
                     match BackingTrackData::open(path).await {
                         Err(e) => {
                             error!("Failed to load backing track at {path}: {e}");
@@ -1004,7 +1007,7 @@ impl Server {
             };
 
             // let bytes_in = bytes_in.freeze();
-            debug!("Got {bytes_read} audio bytes from {0}", &incoming_addr);
+            trace!("Got {bytes_read} audio bytes from {0}", &incoming_addr);
 
             // dbg!(&listener_buf[0..bytes_read]);
             // just forward the raw packets, do as little processing as possible

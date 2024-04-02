@@ -1,9 +1,12 @@
 use std::env;
+use std::path::Path;
 
 use bytes::{BufMut, Bytes, BytesMut};
 use tokio::fs::File;
 use tokio::io;
 use tokio::io::AsyncReadExt;
+use crate::vrl_packet::VRTPPacket;
+use crate::VRLTCPPacket;
 
 static BACKING_TRACK_DIR_ENV: &str = "BACKING_TRACK_DIR";
 
@@ -46,22 +49,25 @@ impl BackingTrackData {
         let mut file = File::open(filename).await?;
         let mut buf = Vec::<u8>::new();
         let _ = file.read_to_end(&mut buf).await?;
-        let mut bytes_data = BytesMut::new();
         // convert to utf-8
-        let filename_bytes = filename.as_bytes();
+        let filename_header = Path::new(filename);
+        
+        let filename_bytes = filename_header.file_name().unwrap().as_encoded_bytes();
         // append the filename
+        let mut header = BytesMut::with_capacity(10);
+        header.put_u16(filename_bytes.len() as u16);
+        header.put(filename_bytes);
 
-        let header_len = filename_bytes.len() + 2;
-        let body_length = buf.len();
+        // let body_length = buf.len();
+        
+        let backing_track_data = VRLTCPPacket::new(
+            "NEWTRACK",
+            header.freeze(),
+            Bytes::copy_from_slice(&buf)
+        );
 
-        bytes_data.put("NEWTRACK".as_bytes());
-        bytes_data.put_u16(header_len as u16);
-        bytes_data.put_u32(body_length as u32);
-        bytes_data.put_u16(filename_bytes.len() as u16);
-        bytes_data.put(filename_bytes);
-        bytes_data.put(buf.as_slice());
         Ok(Self {
-            data: bytes_data.freeze(),
+            data: backing_track_data.into(),
             filename: filename.to_owned()
         })
     }
