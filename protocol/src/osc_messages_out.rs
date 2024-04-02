@@ -34,7 +34,7 @@ impl OSCEncodable for ServerMessage {
             Self::Scene(msg) => msg.to_message(existing_prefix),
             Self::Timing => todo!(),
             Self::Performer(psm) => psm.to_message(existing_prefix),
-            Self::Backing(_) => todo!()
+            Self::Backing(msg) => msg.to_message(existing_prefix),
 
         }
     }
@@ -122,8 +122,8 @@ impl OSCDecodable for SceneMessage {
 #[derive(PartialEq, Debug, Clone)]
 pub enum BackingMessage {
     Stop,
-    /// At which timestamp should we start? If negative, start from the beginning.
-    Start(f32),
+    /// How many samples in should the sound start?
+    Start(i32),
     /// Load a new backing track with the given descriptor
     New(String),
 }
@@ -146,7 +146,7 @@ impl OSCEncodable for BackingMessage {
         existing_prefix.push(self.variant_prefix());
         let pfx = existing_prefix.join("/");
         match self {
-            Self::Start(ts) => OscMessage { addr: pfx, args: vec![OscType::Float(*ts)] },
+            Self::Start(ts) => OscMessage { addr: pfx, args: vec![OscType::Int(*ts)] },
             Self::Stop => OscMessage {addr: pfx, args: vec![]},
             Self::New(new_song) => OscMessage {addr: pfx, args: vec![OscType::String(new_song.clone())]}
         }
@@ -163,8 +163,8 @@ impl OSCDecodable for BackingMessage {
                 "stop" => Some(Self::Stop),
                 "start" | "new" => {
                     if !message.args.is_empty() {
-                        if let OscType::Float(f) = message.args[0] {
-                            return Some(Self::Start(f))
+                        if let OscType::Int(i) = message.args[0] {
+                            return Some(Self::Start(i))
                         }
                         if let OscType::String(str) = &message.args[0] {
                             return Some(Self::New(str.clone()))

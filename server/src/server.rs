@@ -26,7 +26,7 @@ use protocol::{osc_messages_out::ServerMessage, UserData, UserIDType};
 use protocol::backing_track::BackingTrackData;
 use protocol::handshake::{HandshakeAck, HandshakeCompletion, HandshakeSynAck, ServerPortMap};
 use protocol::osc_messages_in::ClientMessage;
-use protocol::osc_messages_out::PerformerServerMessage;
+use protocol::osc_messages_out::{BackingMessage, PerformerServerMessage};
 use protocol::UserType;
 use protocol::vrl_packet::{OscData, VRTPPacket};
 
@@ -34,6 +34,7 @@ use crate::client::{ClientChannelData, VRLClient};
 use crate::client::audience::AudienceMember;
 use crate::client::performer;
 use crate::MAX_CHAN_SIZE;
+use crate::performance::{BackingTrackState, PerformanceState};
 
 // use crate::client::synchronizer::OscData;
 
@@ -79,6 +80,8 @@ pub struct ServerUserData {
     /// Send a connected socket on this channel when a new heartbeat channel is established.
     heartbeat_socket_send: Sender<TcpStream>,
 }
+
+
 
 
 
@@ -138,6 +141,8 @@ pub struct Server {
     /// Whether we are using UDP multicast for our listeners.
     use_multicast: bool,
     late_chans: Option<Arc<ServerRelayChannels<UserIDType>>>,
+    
+    performance_data: Arc<Mutex<PerformanceState>>
 
     // due to how mpsc channels work, it's probably easier to include the music channel in 
 
@@ -280,7 +285,8 @@ impl Server {
             backing_track_rx: Some(backing_track_rx),
             late_chans: None,
 
-            use_multicast
+            use_multicast,
+            performance_data: Arc::new(Mutex::new(PerformanceState::default()))
 
         }
     }
@@ -320,19 +326,33 @@ impl Server {
                         "default" | "d" => "utils\\howd_i_wind_up_here.mp3",
                         _ => path
                     };
-                    match BackingTrackData::open(path).await {
-                        Err(e) => {
-                            error!("Failed to load backing track at {path}: {e}");
-                        }
-                        Ok(data) => {
-                            info!("Sending backing track to client(s)");
-                            self.backing_track_tx.send(data).await.unwrap()
-                        }
-                    }
+                    self.change_backing_track(path).await;
+                    
                 },
                 ("message", Some(msg)) => {
                     match msg {
                         "ready" => self.server_event_tx.send(ServerMessage::Performer(PerformerServerMessage::Ready(true))).await.unwrap(),
+                        "backing" => {
+                            let is_playing: bool;
+                            
+                            let perf_data = self.performance_data.lock().await;
+                            match perf_data.backing_track() {
+                                None => warn!("No backing track loaded! Try sending one first."),
+                                Some(st) => {
+                                    let msg = if st.is_playing() {
+                                        BackingMessage::Stop
+                                    }
+                                    else {
+                                        BackingMessage::Start(0)
+                                    };
+                                    // ensure we're not still holding onto this lock
+                                    drop(perf_data);        
+                                    if let Err(e) = self.set_backing_track_state(msg).await {
+                                        warn!("Failed to adjust backing track state: {e}")
+                                    }
+                                }
+                            }
+                        }
                         _ => warn!("Unknown server message '{msg}'"),
                     }
 
@@ -345,8 +365,41 @@ impl Server {
 
     }
 
-    pub async fn change_backing_track() {
-
+    /// Update the backing track.
+    pub async fn change_backing_track(&mut self, path: &str) {
+        match BackingTrackData::open(path).await {
+            Err(e) => {
+                error!("Failed to load backing track at {path}: {e}");
+            }
+            Ok(data) => {
+                info!("Sending backing track to client(s)");
+                let mut perf_data = self.performance_data.lock().await;
+                perf_data.update_backing_track(path);
+                self.backing_track_tx.send(data).await.unwrap()
+            }
+        }
+    }
+    
+    pub async fn set_backing_track_state(&self, msg: BackingMessage) -> Result<(), &str> {
+        let mut pd = self.performance_data.lock().await;
+        match pd.backing_track_mut() {
+            None => return Err("No backing track has been selected yet!"),
+            Some(bt) => {
+                match (bt.is_playing(), &msg) {
+                    (true, BackingMessage::Start(_)) | (false, BackingMessage::Stop) => return Err("Track is already in this state."),
+                    (b, _) => {
+                        // we're reversing it here since they're not equal
+                        bt.mark_playing(!b);
+                        warn!("Updating backing track to be {}", if b {"stopped"} else {"playing"});
+                    }
+                };
+                
+                self.server_event_tx.send(ServerMessage::Backing(msg)).await.unwrap();
+                
+            }
+        };
+        Ok(())
+        
     }
 
     /// Start up the host server's connection receiving thread.

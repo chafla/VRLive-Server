@@ -101,7 +101,7 @@ pub trait VRLClient {
                         warn!("{label} Failed to encode osc message {0:?}: {e}", &msg);
                         return Err("ah".into());
                     }
-                    
+
                     let message_out = VRLTCPPacket::new(
                         "BUNDLE",
                         Bytes::new(),  // empty,
