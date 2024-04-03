@@ -327,9 +327,6 @@ pub trait VRLClient {
 
 
         let mut client_event_buf: [u8; 1024];
-
-            // TODO AFTER BREAK
-            // INTEGRATE THIS WITH THE SAME SELECT! LOGIC
         loop {
             client_event_buf = [0; 1024];
             tokio::select! {

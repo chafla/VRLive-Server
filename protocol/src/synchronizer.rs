@@ -23,15 +23,18 @@ pub struct Synchronizer {
     mocap_heap: BinaryHeap<Reverse<OscData>>,
     /// The time at which the synchronizer was started. Used for re-syncing.
     zero_time: u32,
+    /// The ID of the user who owns this synchronizer.
+    user_id: u16,
 }
 
 impl Synchronizer {
-    pub fn new(audio_out: &Sender<VRTPPacket>) -> Self {
+    pub fn new(audio_out: &Sender<VRTPPacket>, user_id: u16) -> Self {
         Self {
             combined_out: audio_out.clone(),
             audio_heap: BinaryHeap::new(),
             mocap_heap: BinaryHeap::new(),
             zero_time: 0,
+            user_id,
         }
     }
 
@@ -174,7 +177,7 @@ impl Synchronizer {
                     }
                 }
 
-                if let Err(e) = self.combined_out.send(VRTPPacket::Raw(mocap_parts, audio_packet)).await {
+                if let Err(e) = self.combined_out.send(VRTPPacket::Raw(mocap_parts, audio_packet, self.user_id)).await {
                     error!("Failed to send to sync out: channel likely closed ({e})");
                     break;
                 }

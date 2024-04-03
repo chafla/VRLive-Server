@@ -318,10 +318,10 @@ impl Server {
             let valid_commands = vec!["help", "backing", "message"];
 
             match (start, rest) {
-                ("help", _) => {
+                ("help" | "h", _) => {
                     println!("Possible commands are: {}", valid_commands.join(", "))
                 }
-                ("backing", Some(path)) => {
+                ("backing" | "b", Some(path)) => {
                     let path = match path {
                         "default" | "d" => "utils\\howd_i_wind_up_here.mp3",
                         _ => path
@@ -329,12 +329,10 @@ impl Server {
                     self.change_backing_track(path).await;
                     
                 },
-                ("message", Some(msg)) => {
+                ("message" | "msg" | "m", Some(msg)) => {
                     match msg {
                         "ready" => self.server_event_tx.send(ServerMessage::Performer(PerformerServerMessage::Ready(true))).await.unwrap(),
                         "backing" => {
-                            let is_playing: bool;
-                            
                             let perf_data = self.performance_data.lock().await;
                             match perf_data.backing_track() {
                                 None => warn!("No backing track loaded! Try sending one first."),

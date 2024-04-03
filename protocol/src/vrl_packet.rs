@@ -1,9 +1,11 @@
 use std::cmp::Ordering;
+use std::mem::{size_of, size_of_val};
 
 use bytes::{BufMut, Bytes, BytesMut};
 use rosc::{OscBundle, OscPacket, OscTime};
 use rosc::encoder::encode;
 use webrtc::rtp::packet::Packet;
+use crate::UserIDType;
 
 use crate::vrm_packet::{convert_to_vrm_base, convert_to_vrm_do_nothing};
 
@@ -157,7 +159,7 @@ impl PartialOrd for OscData {
 #[derive(Debug, Clone)]
 pub enum VRTPPacket {
     Encoded(Bytes),
-    Raw(Vec<OscData>, Option<RTPPacket>)
+    Raw(Vec<OscData>, Option<RTPPacket>, UserIDType)
 }
 
 impl TryInto<Bytes> for VRTPPacket {
@@ -166,7 +168,7 @@ impl TryInto<Bytes> for VRTPPacket {
     fn try_into(self) -> Result<Bytes, Self::Error> {
         match self {
             VRTPPacket::Encoded(b) => Ok(b),
-            VRTPPacket::Raw(osc_messages, rtp) => {
+            VRTPPacket::Raw(osc_messages, rtp, user_id) => {
 
                 // let mut first_timestamp: Option<OscTime> = None;
 
@@ -217,7 +219,13 @@ impl TryInto<Bytes> for VRTPPacket {
 
                 // 4 from
                 // 2 - 16 bit
-                let pkt_size = audio_size + osc_size + 2 + 2 + 4;
+                let pkt_size =
+                    audio_size
+                    + osc_size
+                    + size_of::<u16>()  // audio size's size
+                    + size_of::<u16>()  // osc size's size
+                    + size_of::<u32>()  // pkt_size proper
+                    + size_of::<u16>();  // size of user id
 
                 // provide two bytes for the size of our total payload
 
@@ -231,6 +239,7 @@ impl TryInto<Bytes> for VRTPPacket {
                 bytes_out.put_u32(pkt_size as u32);
                 bytes_out.put_u16(osc_size as u16);
                 bytes_out.put_u16(audio_size as u16);
+                bytes_out.put_u16(user_id);
 
                 // dbg!(&osc_bytes);
 

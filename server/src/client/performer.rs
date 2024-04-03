@@ -58,7 +58,7 @@ impl Performer {
     ) -> Self {
 
 
-        let mut synchronizer = Synchronizer::new(&base_channels.synchronizer_vrtp_out.take().unwrap());
+        let mut synchronizer = Synchronizer::new(&base_channels.synchronizer_vrtp_out.take().unwrap(), user_data.participant_id);
         // let sync_out = base_channels.synchronizer_vrtp_out.take().unwrap();
         tokio::spawn(async move {
             synchronizer.intake(mocap_to_sync, audio_to_sync, CLOCK_RATE).await;
