@@ -20,10 +20,20 @@ mod vrm_packet;
 pub type UserIDType = u16;
 
 
-#[derive(Serialize, Deserialize, Debug, Copy, Clone)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, Eq, PartialEq)]
 pub enum UserType {
     Audience,
     Performer
+}
+
+impl From<i32> for UserType {
+    fn from(value: i32) -> Self {
+        match value {
+            1 => UserType::Audience,
+            2 => UserType::Performer,
+            _ => unimplemented!()
+        }
+    }
 }
 
 

@@ -14,7 +14,7 @@ pub enum ClientMessage {
 
 impl OSCEncodable for ClientMessage {
     fn base_prefix() -> String {
-        "client".to_owned()
+        "/client".to_owned()
     }
 
     fn variant_prefix(&self) -> String {
