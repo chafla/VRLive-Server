@@ -11,6 +11,9 @@ use webrtc::rtp::packet::Packet as Packet;
 use crate::vrl_packet::{OscData, RTPPacket, RTPStreamInfo, VRTPPacket};
 
 static AUDIO_TIMEOUT: Duration = Duration::from_millis(100);
+
+/// Maximum heap size before we start purging it to save memory
+static MAX_HEAP_SIZE: usize = 10000;
 // use crate::VRTPPacket;
 
 pub struct Synchronizer {
@@ -193,6 +196,19 @@ impl Synchronizer {
                 info!("Current pressure:");
                 info!("Audio: {}", self.audio_heap.len());
                 info!("Mocap: {}", self.mocap_heap.len())
+            }
+            
+            // if our heaps get too large (likely due to mocap not being consumed),
+            // drain the heaps so we can 
+            
+            if self.audio_heap.len() > MAX_HEAP_SIZE {
+                warn!("Audio heap had over {MAX_HEAP_SIZE} items, draining {} items!", self.audio_heap.len());
+                self.audio_heap.drain();
+            }
+            
+            if self.mocap_heap.len() > MAX_HEAP_SIZE {
+                warn!("Mocap heap had over {MAX_HEAP_SIZE} items, draining {} items!", self.mocap_heap.len());
+                self.mocap_heap.drain();
             }
 
             n_packets_through += 1;
