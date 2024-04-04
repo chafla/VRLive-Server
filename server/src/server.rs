@@ -26,7 +26,7 @@ use protocol::{osc_messages_out::ServerMessage, UserData, UserIDType};
 use protocol::backing_track::BackingTrackData;
 use protocol::handshake::{HandshakeAck, HandshakeCompletion, HandshakeSynAck, ServerPortMap};
 use protocol::osc_messages_in::ClientMessage;
-use protocol::osc_messages_out::{BackingMessage, PerformerServerMessage};
+use protocol::osc_messages_out::{BackingMessage, PerformerServerMessage, StatusMessage};
 use protocol::UserType;
 use protocol::vrl_packet::{OscData, VRTPPacket};
 
@@ -101,6 +101,8 @@ pub struct ServerThreadData {
     /// Current set of users.
     all_users: Arc<RwLock<HashMap<String, ServerUserData>>>,
     extra_ports: Arc<HashMap<String, u16>>,
+    /// Clients
+    clients_by_id: Arc<RwLock<HashMap<UserIDType, ServerUserData>>>,
 }
 
 pub struct Server {
@@ -168,7 +170,7 @@ pub enum ListenerMessage <U, T>
 
 pub enum HandshakeResult {
     NewConnection(UserIDType, ServerUserData),
-    Reconnection(UserIDType)
+    Reconnection(UserIDType, ServerUserData)
 }
 
 /// A thread-local struct useful for managing large amounts of listeners without needing to refer to some external, mutexed data structure.
@@ -615,6 +617,8 @@ impl Server {
                 let clients_by_ip_local = Arc::clone(&clients_by_ip);
 
                 info!("Got a new connection from {incoming_addr}");
+                // this kinda really sucks LOL
+                let server_event_sender_inner_inner = server_event_sender_inner.clone();
 
                 tokio::spawn(async move {
                     // if let Some(v) = clients_by_ip_local.read().await.get(&incoming_addr.ip().to_string()) {
@@ -633,17 +637,28 @@ impl Server {
                             return
                         },
                         Ok(HandshakeResult::NewConnection(user_id, server_data)) => {
+                            let user_type = server_data.user_type;
                             let mut write_handle = clients_local.write().await;
                             write_handle.insert(user_id, server_data.clone());
 
                             let mut write_handle = clients_by_ip_local.write().await;
                             write_handle.insert(server_data.base_user_data.remote_ip_addr.to_string(), server_data);
+
+                            // inform folks that a new user has joined the fray
+                            // TODO finally make use of heartbeat for a disconnect event
+                            // TODO COME UP WITH A WAY TO SEND ALL EXISTING USER IDS WHEN NEEDED
+                            let new_user_event = ServerMessage::Status(StatusMessage::UserAdd(user_id, user_type));
+                            server_event_sender_inner_inner.send(new_user_event).await.unwrap();
                         },
-                        Ok(HandshakeResult::Reconnection(user_id)) => {
+                        Ok(HandshakeResult::Reconnection(user_id, user_data)) => {
                             info!("User {user_id} has reconnected!");
+                            warn!("Note that this should raise UserReconnect, but doesn't for the sake of MVP!");
+                            let new_user_event = ServerMessage::Status(StatusMessage::UserAdd(user_id, user_data.user_type));
+                            server_event_sender_inner_inner.send(new_user_event).await.unwrap();
                         },
 
                     }
+
 
 
 
@@ -823,7 +838,9 @@ impl Server {
         // we just don't want to have to re-create our existing data structures.
 
         if existing_user {
-            return Ok(HandshakeResult::Reconnection(our_user_id));
+            let lock = server_thread_data.clients_by_id.read().await;
+            let user_data = lock.get(&our_user_id).unwrap();
+            return Ok(HandshakeResult::Reconnection(our_user_id, user_data.clone()));
         }
 
 
@@ -1120,6 +1137,7 @@ impl Server {
             cur_user_id: Arc::clone(&self.cur_user_id),
             extra_ports: self.extra_ports.clone(),
             all_users: Arc::clone(&self.clients_by_ip),
+            clients_by_id: Arc::clone(&self.clients),
 
         }
     }

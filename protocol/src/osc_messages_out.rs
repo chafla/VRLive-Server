@@ -4,19 +4,21 @@
 use log::error;
 use rosc::{OscMessage, OscType};
 
-use crate::{osc_messages_in::PerformerToggle, OSCDecodable, OSCEncodable};
+use crate::{osc_messages_in::PerformerToggle, OSCDecodable, OSCEncodable, UserIDType, UserType};
 
 #[derive(PartialEq, Debug, Clone)]
 pub enum ServerMessage {
     Scene(SceneMessage),
     Timing,  // TODO
     Performer(PerformerServerMessage),
-    Backing(BackingMessage)
+    Backing(BackingMessage),
+    Status(StatusMessage)
 }
 
 impl OSCEncodable for ServerMessage {
+    // add a starting slash for consistency
     fn base_prefix() -> String {
-        "server".to_owned()
+        "/server".to_owned()
     }
 
     fn variant_prefix(&self) -> String {
@@ -24,7 +26,8 @@ impl OSCEncodable for ServerMessage {
             Self::Scene(_) => "scene",
             Self::Timing => "timing",
             Self::Performer(_) => "performer",
-            Self::Backing(_) => "backing"
+            Self::Backing(_) => "backing",
+            Self::Status(_) => "status"
         }.to_owned()
     }
 
@@ -35,6 +38,7 @@ impl OSCEncodable for ServerMessage {
             Self::Timing => todo!(),
             Self::Performer(psm) => psm.to_message(existing_prefix),
             Self::Backing(msg) => msg.to_message(existing_prefix),
+            Self::Status(s) => s.to_message(existing_prefix),
 
         }
     }
@@ -116,6 +120,66 @@ impl OSCDecodable for SceneMessage {
                 _ => None
             }
         }
+    }
+}
+
+#[derive(PartialEq, Debug, Clone)]
+pub enum StatusMessage {
+    UserAdd(UserIDType, UserType),
+    UserRemove(UserIDType, UserType),
+    UserReconnect(UserIDType, UserType),
+}
+
+impl OSCEncodable for StatusMessage {
+    fn base_prefix() -> String {
+        "status".to_owned()
+    }
+
+    fn variant_prefix(&self) -> String {
+        match self {
+            // TODO add another level of hierarchy here, this is kind of lazy
+            Self::UserAdd(_, _) => "useradd",
+            Self::UserRemove(_, _) => "userremove",
+            Self::UserReconnect(_, _) => "userreconnect"
+        }.to_owned()
+    }
+
+    fn to_message(&self, mut existing_prefix: Vec<String>) -> OscMessage {
+        existing_prefix.push(Self::base_prefix());
+        existing_prefix.push(self.variant_prefix());
+        let pfx = existing_prefix.join("/");
+        match self {
+            Self::UserAdd(id, ut) => OscMessage { addr: pfx, args: vec![OscType::Int(*id as i32), OscType::Int(*ut as i32)] },
+            Self::UserRemove(id, ut) => OscMessage { addr: pfx, args: vec![OscType::Int(*id as i32), OscType::Int(*ut as i32)]},
+            Self::UserReconnect(id, ut) => OscMessage { addr: pfx, args: vec![OscType::Int(*id as i32), OscType::Int(*ut as i32)]},
+        }
+    }
+}
+
+impl OSCDecodable for StatusMessage {
+    fn deconstruct_osc(prefix: &str, message: &OscMessage) -> Option<Self> {
+        if prefix.split_once('/').is_some() {
+            None
+        }
+        else {
+            if message.args.len() != 2  {
+                return None;
+            }
+            match (prefix, &message.args[0], &message.args[1]) {
+                // "useradd" => Some(Self::Stop),
+                ("useradd", OscType::Int(id), OscType::Int(ut))  => {
+                    return Some(Self::UserAdd(*id as u16, UserType::from(*ut)))
+                },
+                ("userremove", OscType::Int(i), OscType::Int(ut)) => {
+                    return Some(Self::UserRemove(*i as u16, UserType::from(*ut)))
+                },
+                ("userreconnect", OscType::Int(i), OscType::Int(ut)) => {
+                    return Some(Self::UserReconnect(*i as u16, UserType::from(*ut)))
+                }
+                _ => None
+            }
+        }
+
     }
 }
 
