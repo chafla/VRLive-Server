@@ -156,7 +156,7 @@ impl Synchronizer {
                             break
                         }
                         Some(d) => {
-                            let osc_pkt = OscData::from(d);
+                            let osc_pkt = OscData::new(d, self.user_id);
                             // insert the mocap packet.
                             // note that we wrap it in reverse
                             self.mocap_heap.push(Reverse(osc_pkt));

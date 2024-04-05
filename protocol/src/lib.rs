@@ -36,6 +36,26 @@ impl From<i32> for UserType {
     }
 }
 
+impl From<UserType> for i32 {
+    fn from(value: UserType) -> Self {
+        match value {
+            UserType::Audience => 1,
+            UserType::Performer => 2,
+            _ => unimplemented!()
+        }
+    }
+}
+
+impl From<&i32> for UserType {
+    fn from(value: &i32) -> Self {
+        match value {
+            1 => UserType::Audience,
+            2 => UserType::Performer,
+            _ => unimplemented!()
+        }
+    }
+}
+
 
 /// The source (or destination) for a message.
 /// The int associated with the user represents their user ID,

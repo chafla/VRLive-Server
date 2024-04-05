@@ -6,6 +6,7 @@ use std::fmt::Debug;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Instant;
 use bytes::Bytes;
 
@@ -97,7 +98,7 @@ pub struct ServerThreadData {
     synchronizer_to_out_tx: Sender<VRTPPacket>,
     client_events_in_tx: Sender<ClientMessage>,
     /// The current minimum user ID.
-    cur_user_id: Arc<Mutex<UserIDType>>,
+    cur_user_id: Arc<Mutex<AtomicU16>>,
     /// Current set of users.
     all_users: Arc<RwLock<HashMap<String, ServerUserData>>>,
     extra_ports: Arc<HashMap<String, u16>>,
@@ -117,7 +118,7 @@ pub struct Server {
     /// Separate association associating them by IP rather than their ID
     clients_by_ip: Arc<RwLock<HashMap<String, ServerUserData>>>,
     /// Our current lowest user ID, used as a canonical base for adding more.
-    cur_user_id: Arc<Mutex<UserIDType>>,
+    cur_user_id: Arc<Mutex<AtomicU16>>,
 
     // These channels are here because they need to be cloned by all new clients as common channels.
     /// Output channel coming from each synchronizer and going to the high-priority output thread.
@@ -279,7 +280,7 @@ impl Server {
             client_event_in_tx: client_in_tx,
             server_event_rx: Some(server_event_rx),
             server_event_tx,
-            cur_user_id: Arc::new(Mutex::new(0)),
+            cur_user_id: Arc::new(Mutex::new(AtomicU16::new(0))),
             extra_ports: Arc::new(HashMap::new()),
             general_mocap_tx: base_mocap_tx,
             general_mocap_rx: Some(base_mocap_rx),
@@ -331,6 +332,9 @@ impl Server {
                     self.change_backing_track(path).await;
                     
                 },
+                ("reset", _) => {
+                    println!("Resetting server, dropping all listeners and zeroing things out.")
+                }
                 ("message" | "msg" | "m", Some(msg)) => {
                     match msg {
                         "ready" => self.server_event_tx.send(ServerMessage::Performer(PerformerServerMessage::Ready(true))).await.unwrap(),
@@ -470,8 +474,9 @@ impl Server {
     async fn start_audience_mocap_listeners(&self, mocap_send: Sender<OscData>) {
 
         let mocap_in_addr = SocketAddrV4::new("0.0.0.0".parse().unwrap(), self.port_map.audience_mocap_in);
+        let clients_by_ip = Arc::clone(&self.clients_by_ip);
         tokio::spawn(async move {
-            Self::audience_mocap_listener(&mocap_in_addr, mocap_send).await;
+            Self::audience_mocap_listener(&mocap_in_addr, mocap_send, clients_by_ip).await;
         });
 
 
@@ -637,7 +642,9 @@ impl Server {
                             return
                         },
                         Ok(HandshakeResult::NewConnection(user_id, server_data)) => {
-                            let user_type = server_data.user_type;
+                            // let user_type = server_data.user_type.clone();
+                            let new_user_event = ServerMessage::Status(StatusMessage::UserAdd(user_id, server_data.user_type));
+                            server_event_sender_inner_inner.send(new_user_event).await.unwrap();
                             let mut write_handle = clients_local.write().await;
                             write_handle.insert(user_id, server_data.clone());
 
@@ -647,10 +654,10 @@ impl Server {
                             // inform folks that a new user has joined the fray
                             // TODO finally make use of heartbeat for a disconnect event
                             // TODO COME UP WITH A WAY TO SEND ALL EXISTING USER IDS WHEN NEEDED
-                            let new_user_event = ServerMessage::Status(StatusMessage::UserAdd(user_id, user_type));
-                            server_event_sender_inner_inner.send(new_user_event).await.unwrap();
+
                         },
                         Ok(HandshakeResult::Reconnection(user_id, user_data)) => {
+                            dbg!(&user_data.user_type);
                             info!("User {user_id} has reconnected!");
                             warn!("Note that this should raise UserReconnect, but doesn't for the sake of MVP!");
                             let new_user_event = ServerMessage::Status(StatusMessage::UserAdd(user_id, user_data.user_type));
@@ -700,7 +707,7 @@ impl Server {
     /// Take in motion capture from audience members and sent it out as soon as we can.
     /// Audience members don't really need to worry about sending to specific "clients",
     /// instead they can just forward their data on here, and it will be repeated to any audience members listening.
-    async fn audience_mocap_listener(socket_addr: &SocketAddrV4, listener_channel: Sender<OscData>) {
+    async fn audience_mocap_listener(socket_addr: &SocketAddrV4, listener_channel: Sender<OscData>, users_by_ip: Arc<RwLock<HashMap<String, ServerUserData>>>) {
         // https://github.com/henninglive/tokio-udp-multicast-chat/blob/master/src/main.rs
 
         // assert!(multicast_socket_addr.ip().is_multicast(), "Must be multcast address");
@@ -711,7 +718,7 @@ impl Server {
         let mut listener_buf : [u8; MOCAP_LISTENER_BUF_SIZE] = [0; MOCAP_LISTENER_BUF_SIZE];
 
         loop {
-            let (bytes_read, _) = match sock.recv_from(&mut listener_buf).await {
+            let (bytes_read, addr_in) = match sock.recv_from(&mut listener_buf).await {
                 Err(e) => {
                     error!("failed to read from listener buffer: {e}");
                     continue;
@@ -722,6 +729,20 @@ impl Server {
 
             // just forward the raw packets, do as little processing as possible
             let datagram_data = &listener_buf[0..bytes_read];
+
+            // debug!("Got audience mocap data from {addr_in}");
+            let user_id = {
+                let lock = &users_by_ip.read().await;
+                let audience_member_client = lock.get(&addr_in.ip().to_string());
+                match audience_member_client {
+                    None => {
+                        // warn!("Got audience mocap from someone we haven't handshaked with!");
+                        continue;
+                    },
+                    Some(d) => d.base_user_data.participant_id
+                }
+            };
+            
 
             let pkt = match decoder::decode_udp(datagram_data) {
                 Err(e) => {
@@ -737,7 +758,7 @@ impl Server {
 
             // debug!("Echoing audience mocap!");
 
-            let osc_data = OscData::from(pkt);
+            let osc_data = OscData::new(pkt, user_id);
 
             let _ = listener_channel.send(osc_data).await;
         }
@@ -758,8 +779,8 @@ impl Server {
     /// Perform the handshake. If this completes, it should add a new client.
     /// If this also succeeds, then it should spin up the necessary threads for listening
     async fn perform_handshake(mut socket: TcpStream, addr: SocketAddr, server_thread_data: ServerThreadData, registration_channels: Arc<ServerRelayChannels<UserIDType>>) -> Result<HandshakeResult, String> {
-        let our_user_id;
-        let existing_user;
+        let mut our_user_id = 65535;
+        let mut existing_user = false;
         let mut handshake_buf: [u8; HANDSHAKE_BUF_SIZE] = [0; HANDSHAKE_BUF_SIZE];
 
         // check to see if this is reconnected.
@@ -774,10 +795,8 @@ impl Server {
                     existing_user = true;
                 },
                 None => {
-                    let mut user_id = server_thread_data.cur_user_id.lock().await;
-                    *user_id += 1;
-                    our_user_id = *user_id;
-                    existing_user = false;
+                    let user_id = server_thread_data.cur_user_id.lock().await;
+                    our_user_id = user_id.fetch_add(1, Ordering::Relaxed);
                 }
             };
         }
@@ -840,6 +859,7 @@ impl Server {
         if existing_user {
             let lock = server_thread_data.clients_by_id.read().await;
             let user_data = lock.get(&our_user_id).unwrap();
+            dbg!(&user_data);
             return Ok(HandshakeResult::Reconnection(our_user_id, user_data.clone()));
         }
 

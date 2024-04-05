@@ -111,6 +111,8 @@ pub enum SynchronizerPacket {
 /// Used to apply a sort-order to them based on timestamps.
 #[derive(Clone, Debug)]
 pub struct OscData {
+    /// The user who is responsible for the creation of this bundle.
+    pub user_id: UserIDType,
     pub bundle: OscBundle
 }
 
@@ -118,19 +120,26 @@ impl OscData {
     pub fn bundle(&self) -> &OscBundle {
         &self.bundle
     }
-}
-
-
-impl From<OscBundle> for OscData {
-    fn from(packet: OscBundle) -> Self {
-        Self { bundle: packet }
+    
+    pub fn set_user(&mut self, user: UserIDType) {
+        self.user_id = user;
+    }
+    
+    pub fn new(bundle: OscBundle, user_id: UserIDType) -> Self {
+        Self {
+            user_id,
+            bundle
+        }
     }
 }
 
 impl From<OscData> for Bytes {
     fn from(value: OscData) -> Bytes {
-        let packet = OscPacket::Bundle(value.bundle);
-        Bytes::from(encode(&packet).unwrap())
+        // TODO in a more perfect world, we would have encoded the User ID into the message address, but we would need to rework a substantial portion of what we have now to support that
+        let uid =  value.user_id;
+        let pkt = VRTPPacket::Raw(vec![value], None, uid);
+        // let packet = OscPacket::Bundle(value.bundle);
+        pkt.into()
     }
 }
 
@@ -162,12 +171,10 @@ pub enum VRTPPacket {
     Raw(Vec<OscData>, Option<RTPPacket>, UserIDType)
 }
 
-impl TryInto<Bytes> for VRTPPacket {
-    type Error = String;
-
-    fn try_into(self) -> Result<Bytes, Self::Error> {
-        match self {
-            VRTPPacket::Encoded(b) => Ok(b),
+impl From<VRTPPacket> for Bytes {
+    fn from(value: VRTPPacket) -> Self {
+        match value {
+            VRTPPacket::Encoded(b) => b,
             VRTPPacket::Raw(osc_messages, rtp, user_id) => {
 
                 // let mut first_timestamp: Option<OscTime> = None;
@@ -200,7 +207,7 @@ impl TryInto<Bytes> for VRTPPacket {
 
 
                 if bundle_packets.len() == 0 && rtp.is_none() {
-                    return Err("No data to process!".into())
+                    return Bytes::new()  // empty
                 }
 
                 if first_timestamp.is_none() {
@@ -221,11 +228,11 @@ impl TryInto<Bytes> for VRTPPacket {
                 // 2 - 16 bit
                 let pkt_size =
                     audio_size
-                    + osc_size
-                    + size_of::<u16>()  // audio size's size
-                    + size_of::<u16>()  // osc size's size
-                    + size_of::<u32>()  // pkt_size proper
-                    + size_of::<u16>();  // size of user id
+                        + osc_size
+                        + size_of::<u16>()  // audio size's size
+                        + size_of::<u16>()  // osc size's size
+                        + size_of::<u32>()  // pkt_size proper
+                        + size_of::<u16>();  // size of user id
 
                 // provide two bytes for the size of our total payload
 
@@ -239,7 +246,7 @@ impl TryInto<Bytes> for VRTPPacket {
                 bytes_out.put_u32(pkt_size as u32);
                 bytes_out.put_u16(osc_size as u16);
                 bytes_out.put_u16(audio_size as u16);
-                bytes_out.put_u16(user_id);
+                bytes_out.put_u16(user_id as u16);
 
                 // dbg!(&osc_bytes);
 
@@ -280,7 +287,7 @@ impl TryInto<Bytes> for VRTPPacket {
 
                 // it's set, freeze it and punt it
                 // bytes_out.freeze();
-                Ok(bytes_out.freeze())
+                bytes_out.freeze()
             }
         }
     }

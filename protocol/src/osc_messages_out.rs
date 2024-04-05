@@ -149,9 +149,9 @@ impl OSCEncodable for StatusMessage {
         existing_prefix.push(self.variant_prefix());
         let pfx = existing_prefix.join("/");
         match self {
-            Self::UserAdd(id, ut) => OscMessage { addr: pfx, args: vec![OscType::Int(*id as i32), OscType::Int(*ut as i32)] },
-            Self::UserRemove(id, ut) => OscMessage { addr: pfx, args: vec![OscType::Int(*id as i32), OscType::Int(*ut as i32)]},
-            Self::UserReconnect(id, ut) => OscMessage { addr: pfx, args: vec![OscType::Int(*id as i32), OscType::Int(*ut as i32)]},
+            Self::UserAdd(id, ut) => OscMessage { addr: pfx, args: vec![OscType::Int(*id as i32), OscType::Int((*ut).into())] },
+            Self::UserRemove(id, ut) => OscMessage { addr: pfx, args: vec![OscType::Int(*id as i32), OscType::Int((*ut).into())]},
+            Self::UserReconnect(id, ut) => OscMessage { addr: pfx, args: vec![OscType::Int(*id as i32), OscType::Int((*ut).into())]},
         }
     }
 }
