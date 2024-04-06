@@ -8,7 +8,7 @@ use log::warn;
 
 use serde::{Deserialize, Serialize};
 
-use crate::UserIDType;
+use crate::{UserIDType, UserType};
 
 
 /// Initial message sent in response to a new connection.
@@ -65,9 +65,17 @@ pub struct HandshakeSynAck {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct HandshakeCompletion {
     /// Ports for different services that should be made 
-    pub extra_ports: HashMap<String, u16>
+    pub extra_ports: HashMap<String, u16>,
+    pub other_users: Vec<AdditionalUser>
 }
 
+
+/// Serializable struct representing data for other users.
+#[derive(Serialize, Deserialize, Debug)]
+pub struct AdditionalUser {
+    pub user_id: UserIDType,
+    pub user_type: u16
+}
 
 /// Struct indicating an error of some kind has taken place.
 #[derive(Serialize, Deserialize, Debug)]
@@ -78,7 +86,6 @@ struct HandshakeError {
     err_name: String,
     /// Error message
     err_message: String,
-
 }
 
 

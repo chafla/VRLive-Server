@@ -13,7 +13,19 @@ use crate::vrl_packet::{OscData, RTPPacket, RTPStreamInfo, VRTPPacket};
 static AUDIO_TIMEOUT: Duration = Duration::from_millis(100);
 
 /// Maximum heap size before we start purging it to save memory
-static MAX_HEAP_SIZE: usize = 10000;
+static MAX_HEAP_SIZE: usize = 2000;
+
+static MAX_MOCAP_PACKETS_PER_PACKET: usize = 1;
+
+/// Mocap packets above this size will be warned about.
+static MOCAP_OUTPUT_WARNING_SIZE: usize = 2000;
+
+/// Hard maximum for mocap packet size.
+static MOCAP_OUTPUT_HARD_LIMIT: usize = 9860;
+
+static MOCAP_SEND_AFTER_PRESSURE_REACHES: usize = 5;
+
+static WAIT_FOR_AUDIO_TO_SEND: bool = true;
 // use crate::VRTPPacket;
 
 pub struct Synchronizer {
@@ -163,6 +175,9 @@ impl Synchronizer {
                             // osc_pkt
                         }
                     };
+                    if !WAIT_FOR_AUDIO_TO_SEND || MOCAP_SEND_AFTER_PRESSURE_REACHES > self.mocap_heap.len() {
+                        try_to_send = true;
+                    }
                 },
 
             }
@@ -173,12 +188,21 @@ impl Synchronizer {
                 };
                 // if let Some(Reverse(audio_pkt)) = self.audio_heap.pop() {
                 let mut mocap_parts = vec![];
+                let mut mocap_count = 0;
                 if !self.mocap_heap.is_empty() {
                     // extract all of the mocap packets from the heap in order, and pull them into
                     while let Some(Reverse(x)) = self.mocap_heap.pop() {
-                        mocap_parts.push(x)
+
+                        // dbg!(&x);
+                        mocap_parts.push(x);
+                        mocap_count += 1;
+                        // if (mocap_count > MAX_MOCAP_PACKETS_PER_PACKET) {
+                        //     break;
+                        // }
                     }
                 }
+
+                
 
                 if let Err(e) = self.combined_out.send(VRTPPacket::Raw(mocap_parts, audio_packet, self.user_id)).await {
                     error!("Failed to send to sync out: channel likely closed ({e})");

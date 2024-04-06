@@ -95,7 +95,7 @@ pub trait VRLClient {
                     dbg!(&msg);
                     let msg = msg.encode();
                     let msg = OscPacket::Message(msg);
-                    dbg!(&msg);
+                    // dbg!(&msg);
 
                     let packet = encoder::encode(&msg);
 
@@ -177,12 +177,15 @@ pub trait VRLClient {
             // dbg!(&msg);
             let msg_bytes: Bytes = msg.into();
             
-            if (msg_bytes.len() == 0) {
-                
+            if msg_bytes.len() == 0 {
+                // nothing to send
+                return
             }
 
+            let msg_bytes_len = msg_bytes.len();
+
             if let Err(e) = sock.send_to(msg_bytes.as_ref(), target_addr).await {
-                error!("{label} transmitter failed to send: {e}");
+                error!("{label} transmitter failed to send message of {msg_bytes_len} bytes: {e}");
             }
         }
     }

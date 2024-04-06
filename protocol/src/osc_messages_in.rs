@@ -5,6 +5,8 @@ use rosc::{OscMessage, OscType};
 
 use crate::{OSCDecodable, OSCEncodable};
 
+#[allow(dead_code)]
+
 #[derive(PartialEq, Debug)]
 pub enum ClientMessage {
     Any,

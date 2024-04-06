@@ -36,6 +36,26 @@ impl From<i32> for UserType {
     }
 }
 
+impl From<u16> for UserType {
+    fn from(value: u16) -> Self {
+        match value {
+            1 => UserType::Audience,
+            2 => UserType::Performer,
+            _ => unimplemented!()
+        }
+    }
+}
+
+impl From<UserType> for u16 {
+    fn from(value: UserType) -> Self {
+        match value {
+            UserType::Audience => 1,
+            UserType::Performer => 2,
+            _ => unimplemented!()
+        }
+    }
+}
+
 impl From<UserType> for i32 {
     fn from(value: UserType) -> Self {
         match value {

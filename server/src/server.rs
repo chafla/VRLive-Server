@@ -25,7 +25,7 @@ use webrtc::util::Unmarshal;
 
 use protocol::{osc_messages_out::ServerMessage, UserData, UserIDType};
 use protocol::backing_track::BackingTrackData;
-use protocol::handshake::{HandshakeAck, HandshakeCompletion, HandshakeSynAck, ServerPortMap};
+use protocol::handshake::{AdditionalUser, HandshakeAck, HandshakeCompletion, HandshakeSynAck, ServerPortMap};
 use protocol::osc_messages_in::ClientMessage;
 use protocol::osc_messages_out::{BackingMessage, PerformerServerMessage, StatusMessage};
 use protocol::UserType;
@@ -742,7 +742,7 @@ impl Server {
                     Some(d) => d.base_user_data.participant_id
                 }
             };
-            
+
 
             let pkt = match decoder::decode_udp(datagram_data) {
                 Err(e) => {
@@ -836,9 +836,23 @@ impl Server {
 
         // TODO should probably check for duplicate ports/other sanity things here
 
+        let mut all_other_users = vec![];
+        // gather all of the other users
+        {
+            let user_lock = server_thread_data.all_users.read().await;
+            for (_, data) in user_lock.iter() {
+                all_other_users.push(AdditionalUser{
+                    user_id: data.base_user_data.participant_id,
+                    user_type: data.user_type.into()
+                });
+            }
+        }
+
+
         // send out our last part of the handshake
         let handshake_finish = HandshakeCompletion {
-            extra_ports: server_thread_data.extra_ports.as_ref().clone()
+            extra_ports: server_thread_data.extra_ports.as_ref().clone(),
+            other_users: all_other_users
         };
 
         let handshake_finish_msg = serde_json::to_string(&handshake_finish).unwrap();
@@ -859,7 +873,7 @@ impl Server {
         if existing_user {
             let lock = server_thread_data.clients_by_id.read().await;
             let user_data = lock.get(&our_user_id).unwrap();
-            dbg!(&user_data);
+            // dbg!(&user_data);
             return Ok(HandshakeResult::Reconnection(our_user_id, user_data.clone()));
         }
 

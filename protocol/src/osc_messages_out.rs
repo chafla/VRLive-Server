@@ -6,6 +6,8 @@ use rosc::{OscMessage, OscType};
 
 use crate::{osc_messages_in::PerformerToggle, OSCDecodable, OSCEncodable, UserIDType, UserType};
 
+#[allow(dead_code)]
+
 #[derive(PartialEq, Debug, Clone)]
 pub enum ServerMessage {
     Scene(SceneMessage),
