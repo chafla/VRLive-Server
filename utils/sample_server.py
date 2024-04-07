@@ -261,9 +261,9 @@ def backing_track_thread():
 
 def main():
     handshake()
-    threading.Thread(target=server_event_thread).start()
+    # threading.Thread(target=server_event_thread).start()
     threading.Thread(target=client_event_thread).start()
-    threading.Thread(target=backing_track_thread).start()
+    # threading.Thread(target=backing_track_thread).start()
     threading.Thread(target=mocap_in_thread).start()
     threading.Thread(target=vrtp_in_thread).start()
     threading.Thread(target=vrtp_mocap_relay).start()

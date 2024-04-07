@@ -100,10 +100,11 @@ pub struct ServerThreadData {
     /// The current minimum user ID.
     cur_user_id: Arc<Mutex<AtomicU16>>,
     /// Current set of users.
-    all_users: Arc<RwLock<HashMap<String, ServerUserData>>>,
+    clients_by_ip: Arc<RwLock<HashMap<String, ServerUserData>>>,
     extra_ports: Arc<HashMap<String, u16>>,
     /// Clients
     clients_by_id: Arc<RwLock<HashMap<UserIDType, ServerUserData>>>,
+    late_channels: Option<Arc<ServerRelayChannels<UserIDType>>>,
 }
 
 pub struct Server {
@@ -247,7 +248,7 @@ impl <T> ServerRelayChannels<T>
         Ok(())
     }
 
-    pub async fn unsubscribe(&self, user_type: &UserType, identifier: &'static T) -> anyhow::Result<()> {
+    pub async fn unsubscribe(&self, user_type: &UserType, identifier: T) -> anyhow::Result<()> {
         // these can't just be cloned because they monomorphize down
         self.mocap_sender.send(ListenerMessage::Unsubscribe(identifier.clone())).await?;
         self.server_event_sender.send(ListenerMessage::Unsubscribe(identifier.clone())).await?;
@@ -454,6 +455,47 @@ impl Server {
             assert!(res.is_multicast(), "Must be multcast address");
             res
         } else {default_ip.parse().unwrap()}
+    }
+
+    /// Drop a user entirely, removing all of their data and unsubscribing them from everything.
+    async fn drop_user(user_id: UserIDType, server_thread_data: &ServerThreadData) {
+        let uid_ref = user_id.clone();
+        
+        // remove them from our global data structures so we can drop their channels, letting them clean up nicely
+        
+        let mut write_lock = server_thread_data.clients_by_id.write().await;
+        let user_data = write_lock.remove(&uid_ref);
+       
+        if user_data.is_none() {
+            warn!("Tried to drop user {user_id}, but it looks like they don't exist in our clients!");
+            return;
+        }
+        let user_data = user_data.unwrap();
+        
+        drop(write_lock);
+
+        // use a block so we can just silently throw away the lock and the data structure in the map
+        // once they fall out of scope
+        {
+            // remove them from the other array as well
+            let mut write_lock = server_thread_data.clients_by_ip.write().await;
+            let res = write_lock.remove(&user_data.base_user_data.remote_ip_addr.to_string());
+            
+            if res.is_none() {
+                warn!("User {user_id} was found in clients, but not clients_by_ip! Something's probably pretty wrong, and we might not be able to fully clean up after them.")
+            }
+        }
+        
+        // drop(read_lock);
+        if let Some(c) = &server_thread_data.late_channels {
+            // make sure they're removed from the listener channels
+            if let Err(e) = c.unsubscribe(&user_data.user_type, user_id).await {
+                error!("Something went wrong when unsubscribing channels for {user_id}: {e}");
+            }
+        }
+        
+        drop(user_data);
+        
     }
 
     /// The main function that you'll want to call to start up an internal message router.
@@ -780,19 +822,19 @@ impl Server {
     /// If this also succeeds, then it should spin up the necessary threads for listening
     async fn perform_handshake(mut socket: TcpStream, addr: SocketAddr, server_thread_data: ServerThreadData, registration_channels: Arc<ServerRelayChannels<UserIDType>>) -> Result<HandshakeResult, String> {
         let mut our_user_id = 65535;
-        let mut existing_user = false;
+        let mut existing_user_type: Option<UserType> = None;
         let mut handshake_buf: [u8; HANDSHAKE_BUF_SIZE] = [0; HANDSHAKE_BUF_SIZE];
 
         // check to see if this is reconnected.
         {
             // scope block so we drop this lock when we're done.
-            let lock = server_thread_data.all_users.read().await;
+            let lock = server_thread_data.clients_by_ip.read().await;
             let existing_user_data = lock.get(&addr.ip().to_string());
             match existing_user_data {
                 Some(data) => {
                     // if they're reconnecting, use their same ID to get everything lined up as it should be.
                     our_user_id = data.base_user_data.participant_id;
-                    existing_user = true;
+                    existing_user_type = Some(data.user_type);
                 },
                 None => {
                     let user_id = server_thread_data.cur_user_id.lock().await;
@@ -804,7 +846,7 @@ impl Server {
         // lock the user ID and increment it
         // if we don't complete the handshake it's okay, we will just need this ID when we're done
 
-        let handshake_start = HandshakeAck::new(our_user_id, server_thread_data.host, None);
+        let handshake_start = HandshakeAck::new(our_user_id, server_thread_data.host.clone(), None);
 
         let handshake_start_msg = serde_json::to_string(&handshake_start).unwrap();
         let _ = socket.write_all(handshake_start_msg.as_bytes()).await;
@@ -836,11 +878,45 @@ impl Server {
 
         // TODO should probably check for duplicate ports/other sanity things here
 
+        // I don't understand how a heart is a spade
+        // but somehow the vital connection is made
+
+        let user_data = UserData {
+            participant_id: our_user_id,
+            remote_ip_addr: addr.ip(),
+            fancy_title: synack.own_identifier
+        };
+
+        // for reconnections, we still want to allow the handshake to complete.
+        // we just don't want to have to re-create our existing data structures.
+
+        if let Some(user_type) = existing_user_type {
+            if user_type == synack.user_type.into() {
+                // they're reconnecting as the same kind of user, don't change anything
+                let lock = &server_thread_data.clients_by_id.read().await;
+                let user_data = lock.get(&our_user_id).unwrap();
+                // dbg!(&user_data);
+                return Ok(HandshakeResult::Reconnection(our_user_id, user_data.clone()));
+            }
+            else {
+                // they're changing their user type, oh no
+                // re-initialize everything
+                warn!("User {our_user_id} has changed from {:?} to {:?}, clearing their stuff.", user_type, UserType::from(synack.user_type));
+                Self::drop_user(our_user_id, &server_thread_data).await;
+                
+            }
+           
+        }
+
+
         let mut all_other_users = vec![];
         // gather all of the other users
         {
-            let user_lock = server_thread_data.all_users.read().await;
+            let user_lock = server_thread_data.clients_by_ip.read().await;
             for (_, data) in user_lock.iter() {
+                if data.base_user_data.participant_id == our_user_id {
+                    warn!("Found ourselves in the user ID list!");
+                }
                 all_other_users.push(AdditionalUser{
                     user_id: data.base_user_data.participant_id,
                     user_type: data.user_type.into()
@@ -858,24 +934,6 @@ impl Server {
         let handshake_finish_msg = serde_json::to_string(&handshake_finish).unwrap();
         let _ = socket.write_all(handshake_finish_msg.as_bytes()).await;
 
-        // I don't understand how a heart is a spade
-        // but somehow the vital connection is made
-
-        let user_data = UserData {
-            participant_id: our_user_id,
-            remote_ip_addr: addr.ip(),
-            fancy_title: synack.own_identifier
-        };
-
-        // for reconnections, we still want to allow the handshake to complete.
-        // we just don't want to have to re-create our existing data structures.
-
-        if existing_user {
-            let lock = server_thread_data.clients_by_id.read().await;
-            let user_data = lock.get(&our_user_id).unwrap();
-            // dbg!(&user_data);
-            return Ok(HandshakeResult::Reconnection(our_user_id, user_data.clone()));
-        }
 
 
 
@@ -1087,6 +1145,8 @@ impl Server {
             }
         }
     }
+    
+   
 
     async fn performer_audio_listener(
         listening_addr: &SocketAddrV4, users_by_ip: Arc<RwLock<HashMap<String, ServerUserData>>>,
@@ -1170,8 +1230,12 @@ impl Server {
             client_events_in_tx: self.client_event_in_tx.clone(),
             cur_user_id: Arc::clone(&self.cur_user_id),
             extra_ports: self.extra_ports.clone(),
-            all_users: Arc::clone(&self.clients_by_ip),
+            clients_by_ip: Arc::clone(&self.clients_by_ip),
             clients_by_id: Arc::clone(&self.clients),
+            late_channels: match &self.late_chans {
+                Some(c) => Some(Arc::clone(c)),
+                None => None
+            }
 
         }
     }
