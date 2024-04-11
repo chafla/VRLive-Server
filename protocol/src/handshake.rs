@@ -4,12 +4,11 @@
  */
 
 use std::collections::HashMap;
-use log::warn;
 
+use log::warn;
 use serde::{Deserialize, Serialize};
 
 use crate::{UserIDType, UserType};
-
 
 /// Initial message sent in response to a new connection.
 #[derive(Serialize, Deserialize, Debug)]

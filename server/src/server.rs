@@ -237,25 +237,24 @@ struct ServerRelayChannels<T>
 impl <T> ServerRelayChannels<T>
     where T: Clone + Debug + PartialEq + Send + Sync + 'static
 {
-    pub async fn subscribe(&self, user_type: &UserType, identifier: T, osc_sender: Sender<OscData>, server_event_sender: Sender<ServerMessage>, sync_sender: Sender<VRTPPacket>, backing_track_sender: Sender<BackingTrackData>) -> anyhow::Result<()> {
+    pub async fn subscribe(&self, identifier: T, osc_sender: Sender<OscData>, server_event_sender: Sender<ServerMessage>, sync_sender: Sender<VRTPPacket>, backing_track_sender: Sender<BackingTrackData>) -> anyhow::Result<()> {
         self.mocap_sender.send(ListenerMessage::Subscribe(identifier.clone(), osc_sender)).await?;
         self.server_event_sender.send(ListenerMessage::Subscribe(identifier.clone(), server_event_sender)).await?;
         self.backing_track_sender.send(ListenerMessage::Subscribe(identifier.clone(), backing_track_sender)).await?;
-        if matches!(user_type, UserType::Performer) {
+        // if matches!(user_type, UserType::Performer) {
             self.sync_sender.send(ListenerMessage::Subscribe(identifier.clone(), sync_sender)).await?;
-
-        }
+        // }
         Ok(())
     }
 
-    pub async fn unsubscribe(&self, user_type: &UserType, identifier: T) -> anyhow::Result<()> {
+    pub async fn unsubscribe(&self,  identifier: T) -> anyhow::Result<()> {
         // these can't just be cloned because they monomorphize down
         self.mocap_sender.send(ListenerMessage::Unsubscribe(identifier.clone())).await?;
         self.server_event_sender.send(ListenerMessage::Unsubscribe(identifier.clone())).await?;
         self.backing_track_sender.send(ListenerMessage::Unsubscribe(identifier.clone())).await?;
-        if matches!(user_type, UserType::Performer) {
+        // if matches!(user_type, UserType::Performer) {
             self.sync_sender.send(ListenerMessage::Unsubscribe(identifier.clone())).await?;
-        }
+        // }
         Ok(())
     }
 }
@@ -460,18 +459,18 @@ impl Server {
     /// Drop a user entirely, removing all of their data and unsubscribing them from everything.
     async fn drop_user(user_id: UserIDType, server_thread_data: &ServerThreadData) {
         let uid_ref = user_id.clone();
-        
+
         // remove them from our global data structures so we can drop their channels, letting them clean up nicely
-        
+
         let mut write_lock = server_thread_data.clients_by_id.write().await;
         let user_data = write_lock.remove(&uid_ref);
-       
+
         if user_data.is_none() {
             warn!("Tried to drop user {user_id}, but it looks like they don't exist in our clients!");
             return;
         }
         let user_data = user_data.unwrap();
-        
+
         drop(write_lock);
 
         // use a block so we can just silently throw away the lock and the data structure in the map
@@ -480,22 +479,22 @@ impl Server {
             // remove them from the other array as well
             let mut write_lock = server_thread_data.clients_by_ip.write().await;
             let res = write_lock.remove(&user_data.base_user_data.remote_ip_addr.to_string());
-            
+
             if res.is_none() {
                 warn!("User {user_id} was found in clients, but not clients_by_ip! Something's probably pretty wrong, and we might not be able to fully clean up after them.")
             }
         }
-        
+
         // drop(read_lock);
         if let Some(c) = &server_thread_data.late_channels {
             // make sure they're removed from the listener channels
-            if let Err(e) = c.unsubscribe(&user_data.user_type, user_id).await {
+            if let Err(e) = c.unsubscribe(user_id).await {
                 error!("Something went wrong when unsubscribing channels for {user_id}: {e}");
             }
         }
-        
+
         drop(user_data);
-        
+
     }
 
     /// The main function that you'll want to call to start up an internal message router.
@@ -891,22 +890,15 @@ impl Server {
         // we just don't want to have to re-create our existing data structures.
 
         if let Some(user_type) = existing_user_type {
-            if user_type == synack.user_type.into() {
-                // they're reconnecting as the same kind of user, don't change anything
-                let lock = &server_thread_data.clients_by_id.read().await;
-                let user_data = lock.get(&our_user_id).unwrap();
-                // dbg!(&user_data);
-                return Ok(HandshakeResult::Reconnection(our_user_id, user_data.clone()));
-            }
-            else {
+            if user_type != synack.user_type.into() {
                 // they're changing their user type, oh no
                 // re-initialize everything
                 warn!("User {our_user_id} has changed from {:?} to {:?}, clearing their stuff.", user_type, UserType::from(synack.user_type));
                 Self::drop_user(our_user_id, &server_thread_data).await;
-                
             }
-           
         }
+        
+        // even if they're reconnecting, we need to handshake
 
 
         let mut all_other_users = vec![];
@@ -934,8 +926,15 @@ impl Server {
         let handshake_finish_msg = serde_json::to_string(&handshake_finish).unwrap();
         let _ = socket.write_all(handshake_finish_msg.as_bytes()).await;
 
-
-
+        if let Some(user_type) = existing_user_type {
+            if user_type == synack.user_type.into() {
+                // they're reconnecting as the same kind of user, don't change anything
+                let lock = &server_thread_data.clients_by_id.read().await;
+                let user_data = lock.get(&our_user_id).unwrap();
+                // dbg!(&user_data);
+                return Ok(HandshakeResult::Reconnection(our_user_id, user_data.clone()));
+            }
+        }
 
 
 
@@ -1018,7 +1017,7 @@ impl Server {
         });
 
         // Register the server listeners
-        registration_channels.subscribe(&server_user_data.user_type, our_user_id.clone(), audience_mocap_out_send, server_event_out_send, out_from_sync_tx, backing_track_send).await.unwrap();
+        registration_channels.subscribe(our_user_id.clone(), audience_mocap_out_send, server_event_out_send, out_from_sync_tx, backing_track_send).await.unwrap();
 
         // from here on out, it's up to the client to fill things out.
 
@@ -1145,8 +1144,8 @@ impl Server {
             }
         }
     }
-    
-   
+
+
 
     async fn performer_audio_listener(
         listening_addr: &SocketAddrV4, users_by_ip: Arc<RwLock<HashMap<String, ServerUserData>>>,
@@ -1183,7 +1182,7 @@ impl Server {
             let performer_listener = match users_by_ip.read().await.get(&incoming_addr.ip().to_string()) {
                 None => {
                     if (Instant::now() - last_notice).as_secs() > 5 {
-                        warn!("Got performer audio data from someone who we haven't handshaked with!");
+                        warn!("Got performer audio data from someone who we haven't handshaked with {}!", incoming_addr);
                         last_notice = Instant::now();
                     }
                     continue;

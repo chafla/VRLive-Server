@@ -1,13 +1,14 @@
 use std::cmp::Ordering;
-use std::mem::{size_of, size_of_val};
+use std::mem::{size_of};
 
 use bytes::{BufMut, Bytes, BytesMut};
+use log::warn;
 use rosc::{OscBundle, OscPacket, OscTime};
 use rosc::encoder::encode;
 use webrtc::rtp::packet::Packet;
-use crate::UserIDType;
 
-use crate::vrm_packet::{convert_to_vrm_base, convert_to_vrm_do_nothing};
+use crate::UserIDType;
+use crate::vrm_packet::{convert_to_vrm_do_nothing};
 
 /// Metadata about the current RTP stream.
 #[derive(Copy, Clone, Debug)]
@@ -62,7 +63,7 @@ impl RTPPacket {
         // TODO
         // assuming the timestamp is counted in terms of samples since the song began
         // though since we mostly control the 
-        let current_song_duration = self.timestamp() as f64 / self.sample_rate() as f64;
+        // let current_song_duration = self.timestamp() as f64 / self.sample_rate() as f64;
 
         return (0, 0).into()
 
@@ -259,7 +260,9 @@ impl From<VRTPPacket> for Bytes {
                 assert_eq!(pkt_size, bytes_out.len());
 
 
-
+                if bytes_out.len() > 1400 {
+                    warn!("An outgoing packet was over 1400 bytes in size (actual size: {}) and may be fragmented!", bytes_out.len())
+                }
 
 
                 // let packets = vec![];

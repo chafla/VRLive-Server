@@ -1,5 +1,8 @@
 
 
+#[allow(dead_code)]
+// TODO actually implement this
+
 #[derive(Clone, Debug, Default)]
 pub struct BackingTrackState {
     /// Whether or not we've sent a single backing track out to users

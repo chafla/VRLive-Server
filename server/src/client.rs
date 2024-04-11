@@ -94,6 +94,7 @@ pub trait VRLClient {
                 let handler = move |msg: ServerMessage, label: String| {
                     dbg!(&msg);
                     let msg = msg.encode();
+                    
                     let msg = OscPacket::Message(msg);
                     // dbg!(&msg);
 

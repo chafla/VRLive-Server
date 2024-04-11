@@ -1,3 +1,5 @@
+#[allow(dead_code)]
+
 use std::io;
 use std::net::SocketAddr;
 
@@ -9,6 +11,7 @@ use tokio::net::UdpSocket;
 use tokio::sync::mpsc::{Receiver, Sender};
 use webrtc::rtp::packet::Packet;
 use webrtc::util::Unmarshal;
+
 
 /// Synchronized data representing the data occuring at one timestep
 pub type SynchronizerData = (OscPacket, Bytes, f32);

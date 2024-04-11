@@ -1,12 +1,9 @@
-use std::io::Read;
-use std::mem::size_of;
 use std::net::IpAddr;
 use std::str::from_utf8;
-use bytes::{Buf, BufMut, Bytes, BytesMut};
 
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use rosc::OscMessage;
 use serde::{Deserialize, Serialize};
-use tokio::io::AsyncReadExt;
 
 pub mod osc_messages_in;
 pub mod vrl_packet;
@@ -51,7 +48,7 @@ impl From<UserType> for u16 {
         match value {
             UserType::Audience => 1,
             UserType::Performer => 2,
-            _ => unimplemented!()
+            // _ => unimplemented!()
         }
     }
 }
@@ -61,7 +58,7 @@ impl From<UserType> for i32 {
         match value {
             UserType::Audience => 1,
             UserType::Performer => 2,
-            _ => unimplemented!()
+            // _ => unimplemented!()
         }
     }
 }
