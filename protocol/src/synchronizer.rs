@@ -3,10 +3,11 @@ use std::collections::BinaryHeap;
 use std::time::{Duration};
 
 use log::{debug, error, info, trace, warn};
-use rosc::OscBundle;
+use rosc::{OscArray, OscBundle, OscMessage, OscPacket, OscType};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::Instant;
 use webrtc::rtp::packet::Packet as Packet;
+use crate::osc_messages_in::{ClientMessage, PerformerClientMessage};
 
 use crate::vrl_packet::{OscData, RTPPacket, RTPStreamInfo, VRTPPacket};
 
@@ -41,7 +42,6 @@ pub struct Synchronizer {
     /// The ID of the user who owns this synchronizer.
     user_id: u16,
 }
-
 impl Synchronizer {
     pub fn new(audio_out: &Sender<VRTPPacket>, user_id: u16) -> Self {
         Self {
@@ -216,7 +216,7 @@ impl Synchronizer {
 
 
             // more analytics
-            if n_packets_through % 500 == 0 {
+            if n_packets_through % 500 == 0 && self.audio_heap.len() > 0 || self.mocap_heap.len() > 0 {
                 info!("Current pressure:");
                 info!("Audio: {}", self.audio_heap.len());
                 info!("Mocap: {}", self.mocap_heap.len())
@@ -250,3 +250,28 @@ impl Synchronizer {
         }
     }
 }
+
+
+
+// #[cfg(test)]
+// mod test {
+//     use super::*;
+// 
+//     #[test]
+//     fn try_create_client_message() {
+//         let message = ClientMessage::Performer(PerformerClientMessage::Ready(true));
+// 
+//         let encoded = message.to_message(vec!["".to_owned()]);
+//         let unencoded = ClientMessage::from_osc_message(&encoded);
+//         dbg!(&unencoded);
+//         if let Some(server_msg) = &unencoded {
+//             let reencoded = server_msg.to_message(vec!["".to_owned()]);
+//             let reunencoded = ClientMessage::from_osc_message(&reencoded);
+//             assert_eq!(reencoded.addr, encoded.addr);
+//             assert_eq!(&reunencoded, &unencoded);
+//         }
+//         else {
+//             panic!("Object was not re-encoded")
+//         }
+//     }
+// }

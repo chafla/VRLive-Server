@@ -3,12 +3,14 @@ use std::mem::{size_of};
 
 use bytes::{BufMut, Bytes, BytesMut};
 use log::warn;
-use rosc::{OscBundle, OscPacket, OscTime};
+use rosc::{OscArray, OscBundle, OscMessage, OscPacket, OscTime, OscType};
 use rosc::encoder::encode;
 use webrtc::rtp::packet::Packet;
 
 use crate::UserIDType;
 use crate::vrm_packet::{convert_to_vrm_do_nothing};
+
+const ALERT_ON_FRAGMENTATION: bool = false;
 
 /// Metadata about the current RTP stream.
 #[derive(Copy, Clone, Debug)]
@@ -221,6 +223,8 @@ impl From<VRTPPacket> for Bytes {
                     content: bundle_packets
                 };
                 let outer_bundle = convert_to_vrm_do_nothing(&outer_bundle);
+                let est_bundle_size = estimate_bundle_size(&outer_bundle);
+                
                 let bundle_packed = encode(&OscPacket::Bundle(outer_bundle)).unwrap();
                 osc_bytes.put(bundle_packed.as_slice());
                 let osc_size = osc_bytes.len();
@@ -228,12 +232,12 @@ impl From<VRTPPacket> for Bytes {
                 // 4 from
                 // 2 - 16 bit
                 let pkt_size =
-                    audio_size
-                        + osc_size
-                        + size_of::<u16>()  // audio size's size
-                        + size_of::<u16>()  // osc size's size
-                        + size_of::<u32>()  // pkt_size proper
-                        + size_of::<u16>();  // size of user id
+                        audio_size          // size of the audio payload
+                        + osc_size          // size of the osc payload
+                        + size_of::<u32>()  // size of this variable, pkt_size
+                        + size_of::<u16>()  // size of audio_size
+                        + size_of::<u16>()  // size of osc_size
+                        + size_of::<u16>();  // size of user_id
 
                 // provide two bytes for the size of our total payload
 
@@ -260,8 +264,9 @@ impl From<VRTPPacket> for Bytes {
                 assert_eq!(pkt_size, bytes_out.len());
 
 
-                if bytes_out.len() > 1400 {
-                    warn!("An outgoing packet was over 1400 bytes in size (actual size: {}) and may be fragmented!", bytes_out.len())
+                if bytes_out.len() > 1400 && ALERT_ON_FRAGMENTATION {
+                    warn!("An outgoing packet was over 1400 bytes in size (actual size: {}) and may be fragmented!", bytes_out.len());
+                    warn!("Estimated bundle size was {est_bundle_size}");
                 }
 
 
@@ -299,6 +304,85 @@ impl From<VRTPPacket> for Bytes {
 // pub struct CompressedOscMessage {
 //
 // }
+
+
+
+/// Estimate the size of an OSC bundle, given the spec.
+pub fn estimate_bundle_size(bundle: &OscBundle) -> usize {
+    let mut size = 0;
+
+    size += 8;  // #bundle
+    size += 8;  // timetag
+
+    for pkt in &bundle.content {
+        size += 4;  // i32 for bundle element size
+        size += match pkt {
+            OscPacket::Message(msg) => estimate_message_size(msg),
+            OscPacket::Bundle(b) => estimate_bundle_size(b)
+        }
+        // size += estimate_message_size(message);
+    }
+
+
+    size
+}
+
+/// Provide an estimate for the message size.
+/// This may not be completely accurate, as I might have failed to account for lengths.
+pub fn estimate_message_size(message: &OscMessage) -> usize {
+    let mut size = 0;
+    let addr_len = message.addr.len();
+    size += addr_len + 4 % addr_len;
+    let mut type_tag_size = 4;  // starts with a comma
+    for arg in &message.args {
+        type_tag_size += 4;  // character for each!
+        size += estimate_osc_type_size(arg);
+    }
+
+    size
+}
+
+fn estimate_osc_array_size(osc_array: &OscArray) -> usize {
+    let type_tag_size = 8;  // open, close
+    let mut final_size = 0;
+    for item in &osc_array.content {
+        final_size += match item {
+            OscType::Array(a) => {
+                estimate_osc_array_size(a)
+            },
+            etc => estimate_osc_type_size(etc),
+        }
+    }
+
+    final_size + type_tag_size
+}
+
+fn estimate_osc_type_size(osc_type: &OscType) -> usize {
+    match osc_type {
+        // see https://opensoundcontrol.stanford.edu/spec-1_0.html
+        OscType::Time(t) => 8,
+        OscType::Int(_) => 4,
+        OscType::Float(_) => 4,
+        OscType::String(s) => {
+            let base_len = s.len();
+            base_len + 4 % base_len  // needs to be a multiple of 4
+        },
+        OscType::Blob(b) => b.len(),
+        OscType::Long(_) => 8,
+        OscType::Double(_) => 8,
+        OscType::Char(_) => 4,
+        OscType::Color(_) => 4,
+        OscType::Midi(_) => 4,
+        OscType::Bool(_) => 0,  // allocates nothing! neato
+        // array is a bit busier, and may not be completely accurate (especially if they're nested
+        // FIXME
+        // add 4 onto the end tho to represent the closing version 
+        OscType::Array(a) => 4 + a.content.iter().map(|v| estimate_osc_type_size(v)).sum::<usize>(),
+        OscType::Nil => 0,
+        OscType::Inf => 0,
+    }
+}
+
 
 #[cfg(test)]
 mod test {
