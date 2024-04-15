@@ -41,6 +41,8 @@ pub struct Synchronizer {
     zero_time: u32,
     /// The ID of the user who owns this synchronizer.
     user_id: u16,
+    // /// The current backing track time.
+    // backing_track_sample: 
 }
 impl Synchronizer {
     pub fn new(audio_out: &Sender<VRTPPacket>, user_id: u16) -> Self {

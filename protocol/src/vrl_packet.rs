@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::mem::{size_of};
 
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use log::warn;
 use rosc::{OscArray, OscBundle, OscMessage, OscPacket, OscTime, OscType};
 use rosc::encoder::encode;
@@ -11,6 +11,8 @@ use crate::UserIDType;
 use crate::vrm_packet::{convert_to_vrm_do_nothing};
 
 const ALERT_ON_FRAGMENTATION: bool = false;
+
+const VRL_RTP_PACKET_HEADER_ID: u16 = 5653;
 
 /// Metadata about the current RTP stream.
 #[derive(Copy, Clone, Debug)]
@@ -116,7 +118,7 @@ pub enum SynchronizerPacket {
 pub struct OscData {
     /// The user who is responsible for the creation of this bundle.
     pub user_id: UserIDType,
-    pub bundle: OscBundle
+    pub bundle: OscBundle,
 }
 
 impl OscData {
@@ -174,6 +176,20 @@ pub enum VRTPPacket {
     Raw(Vec<OscData>, Option<RTPPacket>, UserIDType)
 }
 
+fn as_u32_be(array: &[u8]) -> u32 {
+    ((array[0] as u32) << 24) +
+        ((array[1] as u32) << 16) +
+        ((array[2] as u32) <<  8) +
+        ((array[3] as u32) <<  0)
+}
+
+fn as_u32_le(array: &[u8]) -> u32 {
+    ((array[0] as u32) <<  0) +
+        ((array[1] as u32) <<  8) +
+        ((array[2] as u32) << 16) +
+        ((array[3] as u32) << 24)
+}
+
 impl From<VRTPPacket> for Bytes {
     fn from(value: VRTPPacket) -> Self {
         match value {
@@ -187,12 +203,25 @@ impl From<VRTPPacket> for Bytes {
                     None => 0,
                 };
 
+
                 let mut first_timestamp: Option<OscTime> = None;
+
+                let mut backing_track_position = -1f32;
 
                 if let Some(pkt) = &rtp {
                     // TODO deal with this sample rate
-                    first_timestamp = Some(pkt.osc_timestamp())
+                    first_timestamp = Some(pkt.osc_timestamp());
+                    if pkt.packet.header.extension && pkt.packet.header.extension_profile == VRL_RTP_PACKET_HEADER_ID {
+                        // we are working with a proper VRL RTP packet, the backing track position is stored within
+                        // let's extract it
+                        let vrtp_extension = &pkt.packet.header.extensions[0];
+                        let bytes: [u8; 4] = vrtp_extension.payload[0..4].try_into().expect("Were not four bytes in this 4 byte range (somehow");
+                        backing_track_position = f32::from_le_bytes(bytes);
+                        // dbg!(&backing_track_position);
+                    }
+
                 }
+                
 
                 let mut bytes_out = BytesMut::with_capacity(5000);
                 // let osc_bytes = encode(&osc).unwrap();
@@ -229,6 +258,8 @@ impl From<VRTPPacket> for Bytes {
                 osc_bytes.put(bundle_packed.as_slice());
                 let osc_size = osc_bytes.len();
 
+
+
                 // 4 from
                 // 2 - 16 bit
                 let pkt_size =
@@ -237,7 +268,9 @@ impl From<VRTPPacket> for Bytes {
                         + size_of::<u32>()  // size of this variable, pkt_size
                         + size_of::<u16>()  // size of audio_size
                         + size_of::<u16>()  // size of osc_size
-                        + size_of::<u16>();  // size of user_id
+                        + size_of::<u16>()  // size of user_id
+                        + size_of::<f32>(); // size of backing track offset
+
 
                 // provide two bytes for the size of our total payload
 
@@ -252,6 +285,7 @@ impl From<VRTPPacket> for Bytes {
                 bytes_out.put_u16(osc_size as u16);
                 bytes_out.put_u16(audio_size as u16);
                 bytes_out.put_u16(user_id as u16);
+                bytes_out.put_f32(backing_track_position);
 
                 // dbg!(&osc_bytes);
 
