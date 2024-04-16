@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::f32::consts::PI;
 use rosc::{OscBundle, OscMessage, OscPacket, OscType};
 use crate::vrm_packet::ObjectData::{Position, Rotation};
@@ -202,6 +202,76 @@ pub fn convert_to_vrm_base(b: &OscBundle) -> OscBundle {
     convert_to_vrm(b, &OutputMessageFormat::VRM, &base_vrm_id, &mut HashMap::new())
 }
 
+pub const FILTERED_VRM_BONES: [&str; 32] = [
+    // we /really/ don't need all of these
+    "LeftToes",
+    "RightToes",
+    "LeftThumbProximal",
+    "LeftThumbIntermediate",
+    "LeftThumbDistal",
+    "LeftIndexProximal",
+    "LeftIndexIntermediate",
+    "LeftIndexDistal",
+    "LeftMiddleProximal",
+    "LeftMiddleIntermediate",
+    "LeftMiddleDistal",
+    "LeftRingProximal",
+    "LeftRingIntermediate",
+    "LeftRingDistal",
+    "LeftLittleProximal",
+    "LeftLittleIntermediate",
+    "LeftLittleDistal",
+    "RightThumbProximal",
+    "RightThumbIntermediate",
+    "RightThumbDistal",
+    "RightIndexProximal",
+    "RightIndexIntermediate",
+    "RightIndexDistal",
+    "RightMiddleProximal",
+    "RightMiddleIntermediate",
+    "RightMiddleDistal",
+    "RightRingProximal",
+    "RightRingIntermediate",
+    "RightRingDistal",
+    "RightLittleProximal",
+    "RightLittleIntermediate",
+    "RightLittleDistal",
+];
+
+// const FILTERED_ITEMS: HashSet<&str> = HashSet::from(FILTERED_ITEM_LIST);
+
+/// Filter a vrm packet for data that we really don't want or care about.
+pub fn filter_vrm(b: OscBundle, filtered_items: &HashSet<&str>) -> OscBundle {
+    let mut messages = vec![];
+
+    for pkt in b.content {
+        match pkt {
+            OscPacket::Bundle(b) => {
+                messages.push(OscPacket::Bundle(filter_vrm(b, filtered_items)))
+            },
+            OscPacket::Message(m) => {
+                if &m.addr != "/VMC/Ext/Bone/Pos" {
+                    messages.push(OscPacket::Message(m));
+                    continue;
+                };
+                match &m.args[0] {
+                    OscType::String(str) if filtered_items.contains(str.as_str())  => {
+                        continue
+                    },
+                    _ => messages.push(OscPacket::Message(m))
+                }
+                // m.
+
+            }
+        };
+    }
+
+    OscBundle {
+        timetag: b.timetag,
+        content: messages
+    }
+}
+
 pub fn convert_to_vrm_do_nothing(b: &OscBundle) -> OscBundle {
     b.clone()
 }
@@ -212,7 +282,7 @@ fn convert_to_vrm<T>(b: &OscBundle, as_format: &OutputMessageFormat, converter: 
 {
     let mut messages = vec![];
 
-    for ref pkt in &b.content {
+    for pkt in &b.content {
         match pkt {
             OscPacket::Bundle(b) => {
                 convert_to_vrm(b, as_format, converter, hm);

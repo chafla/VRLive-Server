@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::collections::HashSet;
 use std::mem::{size_of};
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
@@ -8,7 +9,7 @@ use rosc::encoder::encode;
 use webrtc::rtp::packet::Packet;
 
 use crate::UserIDType;
-use crate::vrm_packet::{convert_to_vrm_do_nothing};
+use crate::vrm_packet::{convert_to_vrm_do_nothing, filter_vrm, FILTERED_VRM_BONES};
 
 const ALERT_ON_FRAGMENTATION: bool = false;
 
@@ -252,6 +253,8 @@ impl From<VRTPPacket> for Bytes {
                     content: bundle_packets
                 };
                 let outer_bundle = convert_to_vrm_do_nothing(&outer_bundle);
+                let filtered_bone_list = HashSet::from(FILTERED_VRM_BONES);
+                let outer_bundle = filter_vrm(outer_bundle, &filtered_bone_list);
                 let est_bundle_size = estimate_bundle_size(&outer_bundle);
                 
                 let bundle_packed = encode(&OscPacket::Bundle(outer_bundle)).unwrap();
