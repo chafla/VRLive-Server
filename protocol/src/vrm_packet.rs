@@ -6,7 +6,6 @@ use crate::vrm_packet::ObjectData::{Position, Rotation};
 
 enum OutputMessageFormat {
     Raw,
-    Ligeia,
     VRM
 }
 
@@ -30,21 +29,30 @@ fn euler_angles_to_quaternion(roll: f32, pitch: f32, yaw: f32) -> (f32, f32, f32
     let qy = cr * sp * cy + sr * cp * sy;
     let qz = cr * cp * sy - sr * sp * cy;
 
-    (qx, qy, qz, qw)
+    (qw, qx, qy, qz)
 }
 
 // deconstruct slime vr message and convert it into a standardized format
 fn slime_id_to_body_part<T>(message: &OscMessage, id_mapping: T) -> Result<SlimeVRMessageType, String>
     where T: Fn(u32) -> &'static str
 {
-    let mut msg_parts = message.addr.split("/");  // /tracking/trackers/...
+    if message.addr.starts_with("/VMC") {
+        return Err("Input appears to be in VRM format.".into())
+    }
+    if !message.addr.starts_with("/tracking/trackers") {
+        return Err(format!("Input {} does not appear to be slimeVR mapping!", message.addr))
+    }
+    
+    
+    let mut msg_parts = message.addr.split("/");
+    // dbg!(msg_parts.nth(2));  // just pull the end off
+    msg_parts.nth(2);  // consume the starting message
+    
+    // dbg!(&msg_parts);
 
     // leads with an empty string
-    assert_eq!(msg_parts.next(), Some(""));
-    // msg_parts.s
-
-    assert_eq!(msg_parts.next(), Some("tracking"));
-    assert_eq!(msg_parts.next(), Some("trackers"));
+    // if !matches!(msg_parts.next(), Some("")) || !matches!(msg_parts.next(), Some("tracking")) || !matches!(msg_parts.next(), Some("trackers")) {
+    
     // todo clean this up
     let part = if let Some(part) = msg_parts.next() {
         if let Ok(id) = part.parse() {
@@ -55,6 +63,8 @@ fn slime_id_to_body_part<T>(message: &OscMessage, id_mapping: T) -> Result<Slime
                 SlimeVRTarget::Head
             }
             else {
+                dbg!(part);
+                dbg!(message);
                 unimplemented!()
             }
         }
@@ -65,14 +75,15 @@ fn slime_id_to_body_part<T>(message: &OscMessage, id_mapping: T) -> Result<Slime
 
     let msg_type = match (msg_parts.next(), message.args.as_slice()) {
 
-        (Some("position"), [OscType::Float(x), OscType::Float(y), OscType::Float(z)]) => Position(*x, *y, *z),
+        // positions are in -z
+        (Some("position"), [OscType::Float(x), OscType::Float(y), OscType::Float(z)]) => Position(*x, *y, -*z),
         // already in quaternion form
         (Some("rotation"), [OscType::Float(x), OscType::Float(y), OscType::Float(z), OscType::Float(w)]) => Rotation(*x, *y, *z, *w),
         (Some("rotation"), [OscType::Float(x), OscType::Float(y), OscType::Float(z)]) => {
             // i hope you like gimbal lock
             // also slimevr sends them out in degrees
-            let (qx, qy, qz, qw) = euler_angles_to_quaternion_degrees(*x, *y, *z);
-            Rotation(qx, qy, qz, qw)
+            let (qw, qx, qy, qz) = euler_angles_to_quaternion_degrees(*x, *y, *z);
+            Rotation(-qx, -qy, qz, qw)
         }
         (Some(s), a) => panic!("Unknown message type: {s} with {a:?}"),
         _ => unimplemented!()
@@ -105,26 +116,8 @@ fn base_vrm_id(id: u32) -> &'static str {
     }
 }
 
-// match our testbed avatar
-fn ligeia_vrm_id(id: u32) -> &'static str {
-    match id {
-        // these just need to match bones in unity
-        1 => "Spine",
-        2 => "Foot.L",
-        3 => "Foot.R",
-        // these aren't actually in vrm but we'll include them anyway
-        4 => "UpperLeg.L",
-        5 => "UpperLeg.R",
-        6 => "Chest",
-        7 => "UpperArm.L",
-        8 => "UpperArm.R",
-        _ => unimplemented!()
-    }
-}
-
 struct VRMBoneData {
     dest: String,
-    kind: String,
     position: (f32, f32, f32),
     // quaternion
     rotation: (f32, f32, f32, f32)
@@ -133,7 +126,6 @@ struct VRMBoneData {
 impl Default for VRMBoneData {
     fn default() -> Self {
         Self {
-            kind: "".into(),
             dest: "".into(),
             position: (0.0, 0.0, 0.0),
             rotation: (0.0, 0.0, 0.0, 0.0)
@@ -176,29 +168,8 @@ impl SlimeVRMessageType {
     }
 }
 
-/// Convert an incoming address to a counterpart
-// fn convert_message(message: &str, target: &OutputMessageFormat) -> String {
-//
-//     let message_fn = match target {
-//         OutputMessageFormat::Raw => return message.into(),
-//         OutputMessageFormat::VRM => base_vrm_id,
-//         OutputMessageFormat::Ligeia => ligeia_vrm_id,
-//     };
-//
-//     let mut message_type;
-//
-//     // for message_parts
-//
-//     let body_part_identifier = slime_id_to_body_part(message, message_fn).unwrap();
-//
-//     return format!("/VMC/Ext/Tra/Pos")
-// }
 
-pub fn convert_to_vrm_ligeia(b: &OscBundle) -> OscBundle {
-    convert_to_vrm(b, &OutputMessageFormat::Ligeia, &ligeia_vrm_id, &mut HashMap::new())
-}
-
-pub fn convert_to_vrm_base(b: &OscBundle) -> OscBundle {
+pub fn convert_to_vrm_base(b: &OscBundle) -> Result<OscBundle, String> {
     convert_to_vrm(b, &OutputMessageFormat::VRM, &base_vrm_id, &mut HashMap::new())
 }
 
@@ -277,7 +248,7 @@ pub fn convert_to_vrm_do_nothing(b: &OscBundle) -> OscBundle {
 }
 
 /// Convert an osc bundle to the type that we expect, given the standard slimevr input.
-fn convert_to_vrm<T>(b: &OscBundle, as_format: &OutputMessageFormat, converter: &T, hm: &mut HashMap<SlimeVRTarget, VRMBoneData>) -> OscBundle
+fn convert_to_vrm<T>(b: &OscBundle, as_format: &OutputMessageFormat, converter: &T, hm: &mut HashMap<SlimeVRTarget, VRMBoneData>) -> Result<OscBundle, String>
     where T: Fn(u32) -> &'static str
 {
     let mut messages = vec![];
@@ -285,10 +256,10 @@ fn convert_to_vrm<T>(b: &OscBundle, as_format: &OutputMessageFormat, converter: 
     for pkt in &b.content {
         match pkt {
             OscPacket::Bundle(b) => {
-                convert_to_vrm(b, as_format, converter, hm);
+                convert_to_vrm(b, as_format, converter, hm)?;
             }
             OscPacket::Message(m) => {
-                let converted_message = slime_id_to_body_part(m, converter).unwrap();
+                let converted_message = slime_id_to_body_part(m, converter)?;
                 let msg_addr = converted_message.get_vrm_addr("Bone");
 
                 // let msg_kind = converted_message.sou
@@ -323,10 +294,10 @@ fn convert_to_vrm<T>(b: &OscBundle, as_format: &OutputMessageFormat, converter: 
         }))
     }
 
-    OscBundle {
+    Ok(OscBundle {
         timetag: b.timetag,
         content: messages
-    }
+    })
 
 
 }

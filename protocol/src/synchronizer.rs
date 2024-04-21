@@ -1,33 +1,40 @@
+/// The synchronizer.
+/// This is the primary component responsible for combining tracks and constructing the VRTP packets
+/// that will be sent to audience members and performers.
+
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::time::{Duration};
 
 use log::{debug, error, info, trace, warn};
-use rosc::{OscArray, OscBundle, OscMessage, OscPacket, OscType};
+use rosc::OscBundle;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::Instant;
 use webrtc::rtp::packet::Packet as Packet;
-use crate::osc_messages_in::{ClientMessage, PerformerClientMessage};
 
 use crate::vrl_packet::{OscData, RTPPacket, RTPStreamInfo, VRTPPacket};
 
-static AUDIO_TIMEOUT: Duration = Duration::from_millis(100);
+/// How long we'll wait between audio packets before just sending a mocap packet
+static AUDIO_TIMEOUT: Duration = Duration::from_millis(50);
 
 /// Maximum heap size before we start purging it to save memory
-static MAX_HEAP_SIZE: usize = 2000;
+static MAX_HEAP_SIZE: usize = 200 ;
 
-static MAX_MOCAP_PACKETS_PER_PACKET: usize = 1;
+// The minimum number of messages that will be sent per bundle.
+// static MIN_MESSAGES_PER_BUNDLE: usize = 10;
 
-/// Mocap packets above this size will be warned about.
-static MOCAP_OUTPUT_WARNING_SIZE: usize = 2000;
+// The maximum number of total mocap bundles we'll send per packet.
+// static MAX_MOCAP_PACKETS_PER_PACKET: usize = 2;
 
-/// Hard maximum for mocap packet size.
-static MOCAP_OUTPUT_HARD_LIMIT: usize = 9860;
+// If our mocap packets get above this size, we should be warned about it.
+// static MOCAP_OUTPUT_WARNING_SIZE: usize = 2000;
 
+/// If mocap pressure gets this high, we will send packets anyway.
 static MOCAP_SEND_AFTER_PRESSURE_REACHES: usize = 5;
 
+/// If this is false, we will try to send out mocap as soon as it comes in, rather than waiting 
+/// for an audio packet to send it with.
 static WAIT_FOR_AUDIO_TO_SEND: bool = true;
-// use crate::VRTPPacket;
 
 pub struct Synchronizer {
     /// The channel used to send combined data out to the main server
@@ -39,10 +46,8 @@ pub struct Synchronizer {
     mocap_heap: BinaryHeap<Reverse<OscData>>,
     /// The time at which the synchronizer was started. Used for re-syncing.
     zero_time: u32,
-    /// The ID of the user who owns this synchronizer.
+    /// The ID of the user whose data will be sent out through this synchronizer
     user_id: u16,
-    // /// The current backing track time.
-    // backing_track_sample: 
 }
 impl Synchronizer {
     pub fn new(audio_out: &Sender<VRTPPacket>, user_id: u16) -> Self {
@@ -55,13 +60,10 @@ impl Synchronizer {
         }
     }
 
-    // pub async fn start(mocap_in: Receiver<OscBundle>, audio_in: Receiver<Packet>, combined_out: Sender<VRTPPacket>) {
-    //
-    // }
-
     pub async fn output(&mut self) {}
 
-    /// Take in the data and handle it appropriately
+    /// The main running loop for the synchronizer that handles both the intake and the output.
+    /// 
     pub async fn intake(&mut self, mut mocap_in: Receiver<OscBundle>, mut audio_in: Receiver<Packet>, audio_clock_rate: f32) {
         // RTP meta stores meta information about the stream, such as t=0,
         // so we create it the first time and then just keep re-using it.
@@ -70,7 +72,7 @@ impl Synchronizer {
         // let mut last_handled_timestamp = SystemTime::now();
 
         // analytics
-        let mut durs_micro = 0;
+        // let mut durs_micro = 0;
         let mut n_packets_through = 0;
         let mut last_time = Instant::now();
 
@@ -124,14 +126,6 @@ impl Synchronizer {
                                     // todo ensure we don't include any mocap messages that are older than a certain threshold
                                     let cur_ts = d.header.timestamp as u64;
 
-
-                                    // trace!("dt: {}", cur_ts - last_audio_timestamp);
-                                    // if n_audio_packets % 500 == 0 {
-                                    //     audio_duration_ts = 0;  // reset it so we don't stupidly overflow
-                                    // }
-                                    // audio_duration_ts += cur_ts - last_audio_timestamp;
-                                    // last_audio_timestamp = d.header.timestamp as u64;
-                                    // n_audio_packets += 1;
                                     trace!("cur_ts: {cur_ts}");
 
                                     // End analytics!
@@ -144,18 +138,11 @@ impl Synchronizer {
 
                                     self.audio_heap.push(Reverse(rtp));
 
-                                    // dbg!(&rtp);
-
                                     // Audio events will probably come in a bit less frequently than mocap.
                                     // This is currently the assumption that I'm making, at least.
                                     // When a new audio packet comes in, we'll clear the existing mocap buffer and send the data
                                     // along with the mocap
                                     try_to_send = true;
-
-
-                                    // self.audio_heap.push(Reverse(rtp));
-
-                                    // SynchronizerPacket::Audio(rtp)
                                 }
                             }
                         }
@@ -188,21 +175,24 @@ impl Synchronizer {
                     Some(Reverse(p)) => Some(p),
                     None => None,
                 };
-                // if let Some(Reverse(audio_pkt)) = self.audio_heap.pop() {
+                // we can afford to put a few extra smaller bundles through
                 let mut mocap_parts = vec![];
-                let mut mocap_count = 0;
+                // let messages_seen = 0;
+                // let mut mocap_count = 0;
                 if !self.mocap_heap.is_empty() {
                     // extract all of the mocap packets from the heap in order, and pull them into
                     while let Some(Reverse(x)) = self.mocap_heap.pop() {
-
-                        // dbg!(&x);
+                        // let message_count = x.bundle.content.len();
+                        
                         mocap_parts.push(x);
-                        mocap_count += 1;
-                        // if (mocap_count > MAX_MOCAP_PACKETS_PER_PACKET) {
+                        // mocap_count += 1;
+                        // if (mocap_count >= MAX_MOCAP_PACKETS_PER_PACKET) {
                         //     break;
                         // }
                     }
                 }
+                
+                
 
                 
 
@@ -218,10 +208,15 @@ impl Synchronizer {
 
 
             // more analytics
-            if n_packets_through % 500 == 0 && self.audio_heap.len() > 0 || self.mocap_heap.len() > 0 {
+            if n_packets_through % 500 == 0 && (self.audio_heap.len() > 0 || self.mocap_heap.len() > 0) {
                 info!("Current pressure:");
                 info!("Audio: {}", self.audio_heap.len());
-                info!("Mocap: {}", self.mocap_heap.len())
+                info!("Mocap: {}", self.mocap_heap.len());
+                info!("N packets through: {n_packets_through}");
+            }
+            
+            if self.audio_heap.len() > 0 {
+                warn!("Outstanding audio data was not sent!")
             }
             
             // if our heaps get too large (likely due to mocap not being consumed),
@@ -241,14 +236,10 @@ impl Synchronizer {
             let cur_time = Instant::now();
             let dur = cur_time - last_time;
             trace!("Last packet took {}ms", dur.as_micros() as f64 / 100.0);
-            durs_micro += dur.as_millis();
+            // durs_micro += dur.as_millis();
             last_time = cur_time;
 
 
-            // trace!("Average packet time is currently {}ms", (durs_micro / n_packets_through) as f64);
-            // if n_audio_packets > 0 {
-            //     trace!("Average audio timestamp difference is {}", (audio_duration_ts / n_audio_packets) as f64);
-            // }
         }
     }
 }

@@ -47,10 +47,7 @@ impl Performer {
     pub fn get_title(&self) -> &str {
         &self.user_data.fancy_title
     }
-
-    // pub async fn new_rtp(
-    //     user_data: UserData, base_channels: ClientChannelData, ports: ClientPorts, signaling_channel: TcpStream
-    // )
+    
 
     pub async fn new_rtp(
         user_data: UserData, mut base_channels: ClientChannelData, ports: ClientPortMap, signaling_channel: TcpStream,
@@ -59,7 +56,6 @@ impl Performer {
 
 
         let mut synchronizer = Synchronizer::new(&base_channels.synchronizer_vrtp_out.take().unwrap(), user_data.participant_id);
-        // let sync_out = base_channels.synchronizer_vrtp_out.take().unwrap();
         tokio::spawn(async move {
             synchronizer.intake(mocap_to_sync, audio_to_sync, CLOCK_RATE).await;
         });
@@ -73,10 +69,12 @@ impl Performer {
             streaming_connection: None,
             rtp_stream: None,
             active: Arc::new(AtomicBool::new(true))
-            // synchronizer: Synchronizer::new()
         }
     }
-    pub async fn new_rtc(
+    
+    // the RTC stuff is something that I toyed around with, but it really isn't ready for primetime.
+    // I wouldn't recommend using this, but the framework is there if you want to get it working at some point.
+    async fn new_rtc(
         user_data: UserData, base_channels: ClientChannelData, ports: ClientPortMap, signaling_channel: TcpStream
     ) -> Self {
 
@@ -89,11 +87,6 @@ impl Performer {
             audio_tx,
         ).await.unwrap();
 
-        // let outgoing = Self::create_outgoing_connection(
-        //     &user_data.fancy_title,
-        //     base_channels.synchronizer_vrtp_out.take().unwrap(),
-        //
-        // ).await.unwrap();
 
         Self {
             user_data,
@@ -109,9 +102,9 @@ impl Performer {
     }
 
     /// Start the webRTC connection
-    async fn establish_webrtc_connection(&self) {
-
-    }
+    // async fn establish_webrtc_connection(&self) {
+    // 
+    // }
 
 
     pub fn get_audio_track(identifier: &str) -> TrackLocalStaticRTP {

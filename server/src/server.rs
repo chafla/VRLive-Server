@@ -18,7 +18,7 @@ use rustyline_async::ReadlineEvent::{Eof, Interrupted, Line};
 // use serde_json::Result;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
-use tokio::sync::{mpsc::{self, Receiver, Sender}, Mutex, RwLock};
+use tokio::sync::{mpsc::{Receiver, Sender}, Mutex, RwLock};
 use tokio::sync::mpsc::channel;
 use webrtc::rtp::packet::Packet;
 use webrtc::util::Unmarshal;
@@ -35,7 +35,7 @@ use crate::client::{ClientChannelData, VRLClient};
 use crate::client::audience::AudienceMember;
 use crate::client::performer;
 use crate::MAX_CHAN_SIZE;
-use crate::performance::{BackingTrackState, PerformanceState};
+use crate::performance::PerformanceState;
 
 // use crate::client::synchronizer::OscData;
 
@@ -81,9 +81,6 @@ pub struct ServerUserData {
     /// Send a connected socket on this channel when a new heartbeat channel is established.
     heartbeat_socket_send: Sender<TcpStream>,
 }
-
-
-
 
 
 /// A subset of the data available on the server which can be passed through threads.
@@ -145,21 +142,20 @@ pub struct Server {
     /// Whether we are using UDP multicast for our listeners.
     use_multicast: bool,
     late_chans: Option<Arc<ServerRelayChannels<UserIDType>>>,
-    
-    performance_data: Arc<Mutex<PerformanceState>>
+
+    performance_data: Arc<Mutex<PerformanceState>>,
 
     // due to how mpsc channels work, it's probably easier to include the music channel in 
-
 }
 
 #[derive(Clone, Debug)]
 /// A message to be sent to a server listener, containing some kind of identifier for a new user (U)
 /// as well as a type to be sent across the channel for this user (T).
-pub enum ListenerMessage <U, T>
+pub enum ListenerMessage<U, T>
     where
-        // Represents a user, or some kind of identifier.
+    // Represents a user, or some kind of identifier.
         U: PartialEq + Sync + Send + Clone,
-        // Represents the type of data that will be sent across the channel for these listeners.
+    // Represents the type of data that will be sent across the channel for these listeners.
         T: Sync + Send
 {
     /// A message of this type indicates that the user is subscribing to the channel.
@@ -167,12 +163,12 @@ pub enum ListenerMessage <U, T>
     Subscribe(U, Sender<T>),
     /// A message of this kind indicates that the user should be unsubscribed from the channel, and their listener should
     /// not be sent to anymore.
-    Unsubscribe(U)
+    Unsubscribe(U),
 }
 
 pub enum HandshakeResult {
     NewConnection(UserIDType, ServerUserData),
-    Reconnection(UserIDType, ServerUserData)
+    Reconnection(UserIDType, ServerUserData),
 }
 
 /// A thread-local struct useful for managing large amounts of listeners without needing to refer to some external, mutexed data structure.
@@ -181,7 +177,6 @@ pub enum HandshakeResult {
 /// kind of way, but without actually using broadcast channels. This allows everyone to have a queue that can be nicely cleaned up
 /// and/or restored when connection is lost or gained. It is also not subject to delays from locks, since users can be cleanly
 /// added and removed without needing to check a giant mutexed data structure on each iteration.
-
 #[derive(Debug)]
 struct Listener<T, U>
     where
@@ -193,10 +188,10 @@ struct Listener<T, U>
     /// We can afford a little bit of time complexity loss on insertion/deletion since those events are relatively infrequent.
     client_channels: Vec<(U, Sender<T>)>,
     /// Channel for receiving updates on users.
-    user_update_channel: Receiver<ListenerMessage<U, T>>
+    user_update_channel: Receiver<ListenerMessage<U, T>>,
 }
 
-impl <T, U> Listener<T, U>
+impl<T, U> Listener<T, U>
     where
         U: PartialEq + Sync + Send + Clone,
         T: Sync + Send
@@ -204,7 +199,7 @@ impl <T, U> Listener<T, U>
     pub fn new(user_update_channel: Receiver<ListenerMessage<U, T>>) -> Self {
         Self {
             client_channels: vec![],
-            user_update_channel
+            user_update_channel,
         }
     }
 
@@ -234,7 +229,7 @@ struct ServerRelayChannels<T>
     backing_track_sender: Sender<ListenerMessage<T, BackingTrackData>>,
 }
 
-impl <T> ServerRelayChannels<T>
+impl<T> ServerRelayChannels<T>
     where T: Clone + Debug + PartialEq + Send + Sync + 'static
 {
     pub async fn subscribe(&self, identifier: T, osc_sender: Sender<OscData>, server_event_sender: Sender<ServerMessage>, sync_sender: Sender<VRTPPacket>, backing_track_sender: Sender<BackingTrackData>) -> anyhow::Result<()> {
@@ -242,18 +237,18 @@ impl <T> ServerRelayChannels<T>
         self.server_event_sender.send(ListenerMessage::Subscribe(identifier.clone(), server_event_sender)).await?;
         self.backing_track_sender.send(ListenerMessage::Subscribe(identifier.clone(), backing_track_sender)).await?;
         // if matches!(user_type, UserType::Performer) {
-            self.sync_sender.send(ListenerMessage::Subscribe(identifier.clone(), sync_sender)).await?;
+        self.sync_sender.send(ListenerMessage::Subscribe(identifier.clone(), sync_sender)).await?;
         // }
         Ok(())
     }
 
-    pub async fn unsubscribe(&self,  identifier: T) -> anyhow::Result<()> {
+    pub async fn unsubscribe(&self, identifier: T) -> anyhow::Result<()> {
         // these can't just be cloned because they monomorphize down
         self.mocap_sender.send(ListenerMessage::Unsubscribe(identifier.clone())).await?;
         self.server_event_sender.send(ListenerMessage::Unsubscribe(identifier.clone())).await?;
         self.backing_track_sender.send(ListenerMessage::Unsubscribe(identifier.clone())).await?;
         // if matches!(user_type, UserType::Performer) {
-            self.sync_sender.send(ListenerMessage::Unsubscribe(identifier.clone())).await?;
+        self.sync_sender.send(ListenerMessage::Unsubscribe(identifier.clone())).await?;
         // }
         Ok(())
     }
@@ -261,9 +256,8 @@ impl <T> ServerRelayChannels<T>
 
 impl Server {
     pub fn new(host: String, port_map: ServerPortMap, use_multicast: bool) -> Self {
-
-        let (sync_out_tx, sync_out_rx) = mpsc::channel::<VRTPPacket>(MAX_CHAN_SIZE);
-        let (client_in_tx, client_in_rx) = mpsc::channel::<ClientMessage>(MAX_CHAN_SIZE);
+        let (sync_out_tx, sync_out_rx) = channel::<VRTPPacket>(MAX_CHAN_SIZE);
+        let (client_in_tx, client_in_rx) = channel::<ClientMessage>(MAX_CHAN_SIZE);
         let (server_event_tx, server_event_rx) = channel::<ServerMessage>(MAX_CHAN_SIZE);
         let (base_mocap_tx, base_mocap_rx) = channel(MAX_CHAN_SIZE);
         let (backing_track_tx, backing_track_rx) = channel(MAX_CHAN_SIZE);
@@ -289,8 +283,7 @@ impl Server {
             late_chans: None,
 
             use_multicast,
-            performance_data: Arc::new(Mutex::new(PerformanceState::default()))
-
+            performance_data: Arc::new(Mutex::new(PerformanceState::default())),
         }
     }
 
@@ -308,7 +301,7 @@ impl Server {
                 Err(e) => {
                     println!("Failed to read line: {e}");
                     continue;
-                },
+                }
                 Ok(Eof | Interrupted) => break,
                 Ok(Line(str)) => str
             };
@@ -330,8 +323,7 @@ impl Server {
                         _ => path
                     };
                     self.change_backing_track(path).await;
-                    
-                },
+                }
                 ("reset", _) => {
                     println!("Resetting server, dropping all listeners and zeroing things out.")
                 }
@@ -345,12 +337,11 @@ impl Server {
                                 Some(st) => {
                                     let msg = if st.is_playing() {
                                         BackingMessage::Stop
-                                    }
-                                    else {
+                                    } else {
                                         BackingMessage::Start(0)
                                     };
                                     // ensure we're not still holding onto this lock
-                                    drop(perf_data);        
+                                    drop(perf_data);
                                     if let Err(e) = self.set_backing_track_state(msg).await {
                                         warn!("Failed to adjust backing track state: {e}")
                                     }
@@ -359,14 +350,12 @@ impl Server {
                         }
                         _ => warn!("Unknown server message '{msg}'"),
                     }
-
                 }
                 _ => (),
             }
         }
 
         warn!("Execution was interrupted by user!")
-
     }
 
     /// Update the backing track.
@@ -383,7 +372,7 @@ impl Server {
             }
         }
     }
-    
+
     pub async fn set_backing_track_state(&self, msg: BackingMessage) -> Result<(), &str> {
         let mut pd = self.performance_data.lock().await;
         match pd.backing_track_mut() {
@@ -397,19 +386,15 @@ impl Server {
                         warn!("Updating backing track to be {}", if b {"stopped"} else {"playing"});
                     }
                 };
-                
+
                 self.server_event_tx.send(ServerMessage::Backing(msg)).await.unwrap();
-                
             }
         };
         Ok(())
-        
     }
 
     /// Start up the host server's connection receiving thread.
     pub async fn start(&mut self) -> io::Result<()> {
-
-
         self.start_client_listeners().await;
         // if this fails we're giving up
 
@@ -436,7 +421,7 @@ impl Server {
             mocap_sender: mocap_chan,
             sync_sender: sync_chan,
             server_event_sender: event_chan,
-            backing_track_sender: backing_track_chan
+            backing_track_sender: backing_track_chan,
         }));
 
         self.new_connection_listener(Arc::clone(&self.late_chans.as_ref().unwrap())).await.unwrap();
@@ -445,7 +430,6 @@ impl Server {
 
         self.main_server_loop().await;
         Ok(())
-
     }
 
     fn get_ip(&self, multicast_ip: &str, default_ip: &str) -> Ipv4Addr {
@@ -453,7 +437,7 @@ impl Server {
             let res: Ipv4Addr = multicast_ip.parse().unwrap();
             assert!(res.is_multicast(), "Must be multcast address");
             res
-        } else {default_ip.parse().unwrap()}
+        } else { default_ip.parse().unwrap() }
     }
 
     /// Drop a user entirely, removing all of their data and unsubscribing them from everything.
@@ -494,7 +478,6 @@ impl Server {
         }
 
         drop(user_data);
-
     }
 
     /// The main function that you'll want to call to start up an internal message router.
@@ -513,18 +496,15 @@ impl Server {
     }
 
     async fn start_audience_mocap_listeners(&self, mocap_send: Sender<OscData>) {
-
         let mocap_in_addr = SocketAddrV4::new("0.0.0.0".parse().unwrap(), self.port_map.audience_mocap_in);
         let clients_by_ip = Arc::clone(&self.clients_by_ip);
         tokio::spawn(async move {
             Self::audience_mocap_listener(&mocap_in_addr, mocap_send, clients_by_ip).await;
         });
-
-
     }
 
     async fn start_performer_audio_listener(&self) {
-        let audio_in_addr = SocketAddrV4::new(("0.0.0.0").parse().unwrap(), self.port_map.performer_audio_in);
+        let audio_in_addr = SocketAddrV4::new("0.0.0.0".parse().unwrap(), self.port_map.performer_audio_in);
         let users_by_ip = Arc::clone(&self.clients_by_ip);
         tokio::spawn(async move {
             Self::performer_audio_listener(&audio_in_addr, users_by_ip).await.unwrap();
@@ -532,7 +512,7 @@ impl Server {
     }
 
     async fn start_performer_mocap_listener(&self) {
-        let audio_in_addr = SocketAddrV4::new(("0.0.0.0").parse().unwrap(), self.port_map.performer_mocap_in);
+        let audio_in_addr = SocketAddrV4::new("0.0.0.0".parse().unwrap(), self.port_map.performer_mocap_in);
         let users_by_ip = Arc::clone(&self.clients_by_ip);
         tokio::spawn(async move {
             Self::performer_mocap_listener(&audio_in_addr, users_by_ip).await.unwrap();
@@ -553,13 +533,13 @@ impl Server {
         self.start_listener(
             "client event",
             self.port_map.client_event_conn_port,
-            | user_data: &ServerUserData | user_data.client_event_socket_send.clone(),
+            |user_data: &ServerUserData| user_data.client_event_socket_send.clone(),
         ).await;
 
         self.start_listener(
             "backing track",
             self.port_map.backing_track_conn_port,
-            | user_data: &ServerUserData | user_data.backing_track_socket_send.clone(),
+            |user_data: &ServerUserData| user_data.backing_track_socket_send.clone(),
         ).await;
 
 
@@ -567,9 +547,8 @@ impl Server {
         self.start_listener(
             "server event in",
             self.port_map.server_event_conn_port,
-            | user_data: &ServerUserData | user_data.server_event_socket_send.clone(),
+            |user_data: &ServerUserData| user_data.server_event_socket_send.clone(),
         ).await;
-
     }
 
     /// Create a listener that waits to receive updates from one channel, and relays them onto a collection of other channels.
@@ -625,7 +604,6 @@ impl Server {
                     }
                 }
             }
-
         }
 
         warn!("{label} internal listener shutting down!");
@@ -680,8 +658,8 @@ impl Server {
                     match res {
                         Err(e) => {
                             error!("Attempted handshake with {0} failed: {e}", incoming_addr);
-                            return
-                        },
+                            return;
+                        }
                         Ok(HandshakeResult::NewConnection(user_id, server_data)) => {
                             // let user_type = server_data.user_type.clone();
                             let new_user_event = ServerMessage::Status(StatusMessage::UserAdd(user_id, server_data.user_type));
@@ -695,21 +673,15 @@ impl Server {
                             // inform folks that a new user has joined the fray
                             // TODO finally make use of heartbeat for a disconnect event
                             // TODO COME UP WITH A WAY TO SEND ALL EXISTING USER IDS WHEN NEEDED
-
-                        },
+                        }
                         Ok(HandshakeResult::Reconnection(user_id, user_data)) => {
                             dbg!(&user_data.user_type);
                             info!("User {user_id} has reconnected!");
                             warn!("Note that this should raise UserReconnect, but doesn't for the sake of MVP!");
                             let new_user_event = ServerMessage::Status(StatusMessage::UserAdd(user_id, user_data.user_type));
                             server_event_sender_inner_inner.send(new_user_event).await.unwrap();
-                        },
-
+                        }
                     }
-
-
-
-
                 });
             }
         });
@@ -756,7 +728,7 @@ impl Server {
         info!("Listening for audience mocap on {0}", &socket_addr);
         let sock = UdpSocket::bind(&socket_addr).await.unwrap();
 
-        let mut listener_buf : [u8; MOCAP_LISTENER_BUF_SIZE] = [0; MOCAP_LISTENER_BUF_SIZE];
+        let mut listener_buf: [u8; MOCAP_LISTENER_BUF_SIZE] = [0; MOCAP_LISTENER_BUF_SIZE];
 
         loop {
             let (bytes_read, addr_in) = match sock.recv_from(&mut listener_buf).await {
@@ -779,7 +751,7 @@ impl Server {
                     None => {
                         // warn!("Got audience mocap from someone we haven't handshaked with!");
                         continue;
-                    },
+                    }
                     Some(d) => d.base_user_data.participant_id
                 }
             };
@@ -789,11 +761,11 @@ impl Server {
                 Err(e) => {
                     error!("Audience mocap listener received something that doesn't seem to be OSC: {e}");
                     continue;
-                },
+                }
                 Ok((_, OscPacket::Message(msg))) => {
                     warn!("Mocap listener expected bundle got message {msg:?}");
                     continue;
-                },
+                }
                 Ok((_, OscPacket::Bundle(b))) => b
             };
 
@@ -820,7 +792,7 @@ impl Server {
     /// Perform the handshake. If this completes, it should add a new client.
     /// If this also succeeds, then it should spin up the necessary threads for listening
     async fn perform_handshake(mut socket: TcpStream, addr: SocketAddr, server_thread_data: ServerThreadData, registration_channels: Arc<ServerRelayChannels<UserIDType>>) -> Result<HandshakeResult, String> {
-        let mut our_user_id = 65535;
+        let our_user_id;
         let mut existing_user_type: Option<UserType> = None;
         let mut handshake_buf: [u8; HANDSHAKE_BUF_SIZE] = [0; HANDSHAKE_BUF_SIZE];
 
@@ -834,7 +806,7 @@ impl Server {
                     // if they're reconnecting, use their same ID to get everything lined up as it should be.
                     our_user_id = data.base_user_data.participant_id;
                     existing_user_type = Some(data.user_type);
-                },
+                }
                 None => {
                     let user_id = server_thread_data.cur_user_id.lock().await;
                     our_user_id = user_id.fetch_add(1, Ordering::Relaxed);
@@ -883,7 +855,7 @@ impl Server {
         let user_data = UserData {
             participant_id: our_user_id,
             remote_ip_addr: addr.ip(),
-            fancy_title: synack.own_identifier
+            fancy_title: synack.own_identifier,
         };
 
         // for reconnections, we still want to allow the handshake to complete.
@@ -897,7 +869,7 @@ impl Server {
                 Self::drop_user(our_user_id, &server_thread_data).await;
             }
         }
-        
+
         // even if they're reconnecting, we need to handshake
 
 
@@ -909,9 +881,9 @@ impl Server {
                 if data.base_user_data.participant_id == our_user_id {
                     warn!("Found ourselves in the user ID list!");
                 }
-                all_other_users.push(AdditionalUser{
+                all_other_users.push(AdditionalUser {
                     user_id: data.base_user_data.participant_id,
-                    user_type: data.user_type.into()
+                    user_type: data.user_type.into(),
                 });
             }
         }
@@ -920,7 +892,7 @@ impl Server {
         // send out our last part of the handshake
         let handshake_finish = HandshakeCompletion {
             extra_ports: server_thread_data.extra_ports.as_ref().clone(),
-            other_users: all_other_users
+            other_users: all_other_users,
         };
 
         let handshake_finish_msg = serde_json::to_string(&handshake_finish).unwrap();
@@ -935,8 +907,6 @@ impl Server {
                 return Ok(HandshakeResult::Reconnection(our_user_id, user_data.clone()));
             }
         }
-
-
 
 
         let (backing_track_send, backing_track_recv) = channel::<BackingTrackData>(MAX_CHAN_SIZE);
@@ -968,7 +938,7 @@ impl Server {
             server_event_socket_send: server_event_socket_out,
             heartbeat_socket_send: heartbeat_socket_out,
             performer_audio_sender: performer_audio_tx,
-            performer_mocap_sender: performer_mocap_tx
+            performer_mocap_sender: performer_mocap_tx,
         };
 
         // return server_user_data
@@ -998,10 +968,10 @@ impl Server {
                         server_user_data_inner.base_user_data.clone(),
                         client_channel_data,
                         synack.ports,
-                        socket
+                        socket,
                     );
                     mem.start_main_channels().await;
-                },
+                }
                 UserType::Performer => {
                     let mut aud = performer::Performer::new_rtp(
                         server_user_data_inner.base_user_data.clone(),
@@ -1009,7 +979,7 @@ impl Server {
                         synack.ports,
                         socket,
                         performer_audio_rx,
-                        performer_mocap_rx
+                        performer_mocap_rx,
                     ).await;
                     aud.start_main_channels().await;
                 }
@@ -1020,7 +990,6 @@ impl Server {
         registration_channels.subscribe(our_user_id.clone(), audience_mocap_out_send, server_event_out_send, out_from_sync_tx, backing_track_send).await.unwrap();
 
         // from here on out, it's up to the client to fill things out.
-
 
 
         info!(
@@ -1034,7 +1003,6 @@ impl Server {
             }
         );
         Ok(HandshakeResult::NewConnection(our_user_id, server_user_data))
-
     }
 
     /// Function for forwarding a TCP socket channel onto the client.
@@ -1042,7 +1010,6 @@ impl Server {
     async fn client_connection_listener(
         listening_port: u16, host: String, users_by_ip: Arc<RwLock<HashMap<String, ServerUserData>>>,
         channel_getter: impl Fn(&ServerUserData) -> Sender<TcpStream>, listener_label: &str,
-
     ) -> io::Result<()>
     {
         let addr = format!("{0}:{1}", host, listening_port);
@@ -1057,16 +1024,13 @@ impl Server {
             if found_user.is_none() {
                 warn!("Received a {listener_label} connection request from {0}, but they have not initiated a handshake!", &incoming_addr.to_string());
                 continue;
-            }
-            else {
+            } else {
                 info!("{listener_label} connection established for {0}", &incoming_addr);
             }
             let found_user = found_user.unwrap();
             let _ = channel_getter(found_user).send(socket).await;
         }
-
     }
-
 
 
     // todo this is copy pasted
@@ -1125,11 +1089,11 @@ impl Server {
                 Err(e) => {
                     error!("Audience mocap listener received something that doesn't seem to be OSC: {e}");
                     continue;
-                },
+                }
                 Ok((_, OscPacket::Message(m))) => {
                     warn!("Expected bundle, got single message in performer mocap {m:?}");
                     continue;
-                },
+                }
                 Ok((_, OscPacket::Bundle(bndl))) => bndl
             };
 
@@ -1146,7 +1110,6 @@ impl Server {
     }
 
 
-
     async fn performer_audio_listener(
         listening_addr: &SocketAddrV4, users_by_ip: Arc<RwLock<HashMap<String, ServerUserData>>>,
     ) -> io::Result<()> {
@@ -1154,7 +1117,7 @@ impl Server {
 
         let sock = UdpSocket::bind(listening_addr).await?;
         // let mut bytes_in;
-        let mut listener_buf : [u8; AUDIO_LISTENER_BUF_SIZE];// = [0; LISTENER_BUF_SIZE];
+        let mut listener_buf: [u8; AUDIO_LISTENER_BUF_SIZE];// = [0; LISTENER_BUF_SIZE];
         let mut last_notice = Instant::now();
         loop {
             // bytes_in = bytes::BytesMut::with_capacity(4096);
@@ -1204,21 +1167,15 @@ impl Server {
                 Err(e) => {
                     error!("Audience audio listener received something that doesn't seem to be OSC: {e}");
                     continue;
-                },
+                }
                 Ok(r) => r
             };
 
             if let Err(e) = performer_listener.send(pkt).await {
                 error!("Failed to pass performer mocap data to the client: {e}");
             }
-
         }
-
-
-
-
     }
-
 
 
     fn create_thread_data(&self) -> ServerThreadData {
@@ -1234,8 +1191,7 @@ impl Server {
             late_channels: match &self.late_chans {
                 Some(c) => Some(Arc::clone(c)),
                 None => None
-            }
-
+            },
         }
     }
 }

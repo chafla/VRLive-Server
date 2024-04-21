@@ -11,7 +11,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::mpsc::{Receiver, Sender};
 
-use protocol::{OSCDecodable, OSCEncodable, UserData, VRLTCPPacket};
+use protocol::{OSCDecodable, OSCEncodable, UserData};
 use protocol::backing_track::BackingTrackData;
 use protocol::handshake::ClientPortMap;
 use protocol::heartbeat::HeartbeatStatus;
@@ -19,13 +19,13 @@ use protocol::heartbeat::HeartbeatStatus::Hangup;
 use protocol::osc_messages_in::ClientMessage;
 use protocol::osc_messages_out::ServerMessage;
 use protocol::vrl_packet::{OscData, VRTPPacket};
+use protocol::vrl_tcp_packet::VRLTCPPacket;
 
 // use crate::client::synchronizer::OscData;
 // use protocol::syn
 
 pub mod audience;
 pub mod performer;
-mod streaming;
 // pub mod synchronizer;
 
 
@@ -327,6 +327,8 @@ pub trait VRLClient {
             },
             Some(s) => s
         };
+        
+        let mut notified_on_connection_loss = false;
 
 
 
@@ -355,8 +357,13 @@ pub trait VRLClient {
                         Ok(b) => b
                     };
                     if incoming_bytes == 0 {
-                        // we probably lost connection, let's wait for it to clear
-                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        // we probably lost connection, let's wait for it to clear in case they reconnect
+                        if !notified_on_connection_loss {
+                            notified_on_connection_loss = true;
+                            warn!("{label} got 0 bytes, probably lost connection!")
+                        }
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        continue;
                     }
                     let read_bytes = &client_event_buf[0..incoming_bytes];
                     trace!("{label} got {incoming_bytes} bytes");
@@ -389,33 +396,6 @@ pub trait VRLClient {
         info!("{label} shutting down");
 
     }
-
-    // async fn combined_performer_data_out(&self, mut stream_channel: Receiver<Bytes>, client_socket: SocketAddrV4) {
-    //     'outer: loop {
-    //         // we really don't care what things look like on the receiving end
-    //         // all that we care about is blasting a ton of UDP packets at them as quickly as possible
-    //
-    //     }
-    // }
-    //
-    // async fn synchronized_data_sender(mut synchronized_data_out: Receiver<VRTPPacket>) {
-    //     debug!("Synchronized data sender is up and ready!");
-    //     loop {
-    //         let incoming_message = match synchronized_data_out.recv().await {
-    //             None => {
-    //                 warn!("Synchronized data sender is shutting down!");
-    //                 break;
-    //             },
-    //             Some(VRTPPacket::Encoded(b)) => b,
-    //             Some(raw@VRTPPacket::Raw(_, _)) => raw.into()
-    //         };
-    //         // todo stuff
-    //     }
-    //     // TODO process this data before it's sent
-    // }
-
-    // async fn
-
     /// Thread responsible for updating the backing track as needed.
     async fn backing_track_sender(mut stream_sock: Receiver<TcpStream>, mut backing_track_stream: Receiver<BackingTrackData>, label: &str) {
         let mut client_stream = match stream_sock.recv().await {

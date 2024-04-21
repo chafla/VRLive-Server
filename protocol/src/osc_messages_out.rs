@@ -245,9 +245,12 @@ impl OSCDecodable for BackingMessage {
     }
 }
 
+// TODO
+// This should actually relate to /other/ performers, and as such should have a field denoting the 
+// user ID of the target user.
+
 /// distinctly different from the one in messages_in as this one has matchmaking
 /// also represents the messages being sent to the performer from the server.
-/// still kind of a TODO item
 
 #[derive(PartialEq, Debug, Clone)]
 pub enum PerformerServerMessage {

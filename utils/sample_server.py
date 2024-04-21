@@ -22,10 +22,10 @@ rtp_reader = rtp.RTP(
 )
 
 # if true, we're sending audio elsewhere, not to ourselves
-send_audio = False
+send_audio = True
 
 # if true, we don't want to bind to the local audio/mocap input ports, and just want to send
-dont_listen_locally = True
+dont_listen_locally = False
 
 if not dont_listen_locally:
     print("Warning warning warning, we're consuming UDP packets!")
@@ -140,7 +140,7 @@ def vrtp_in_thread():
 
         mocap_file = open("mocap_out.osc", "wb")
         while not terminating.is_set():
-            data = s.recv(2048)
+            data = s.recv(20000)
             deconstruct_vrtp(data, mocap_file, osc_out)
 
             # print("VRTP data in")
@@ -159,8 +159,11 @@ def deconstruct_vrtp(pkt_in: bytes, mocap_file, mocap_sock):
     total_pl_size = int.from_bytes(pkt_in[0:4], "big")
     osc_size = int.from_bytes(pkt_in[4:6], "big")
     audio_size = int.from_bytes(pkt_in[6:8], "big")
-    osc_data = pkt_in[8:osc_size + 8]
-    audio_data = pkt_in[8+osc_size:]
+    user_id = int.from_bytes(pkt_in[8:10], "big")
+    backing_track_pos = pkt_in[10:14]  # we just need to extract it
+    osc_start = 14
+    osc_data = pkt_in[osc_start:osc_size + osc_start]
+    audio_data = pkt_in[osc_start+osc_size:]
     # decoder = pyogg.opus.OpusDecoder()
     # res = pyogg.opus.opus_decode(decoder, audio_data, audio_size, )
     # audio_file.write(audio_data)
@@ -195,7 +198,7 @@ def vrtp_audio_conv():
         dec = opus_streamer.opuslib.Decoder(48000, 2)
     with open("audio_out.wav", "ab") as audio_file:
         while not terminating.is_set():
-            print("aaaaaa")
+            
             audio_data = performer_audio_queue.get()
             # if send_audio:
 
@@ -205,6 +208,7 @@ def vrtp_audio_conv():
             try:
                 pcm = dec.decode(audio_data, 960, False)
                 audio_file.write(pcm)
+                print("aaaaaa")
             except OSError as e:
 
                 traceback.print_exc()
@@ -262,13 +266,13 @@ def backing_track_thread():
 def main():
     handshake()
     # threading.Thread(target=server_event_thread).start()
-    threading.Thread(target=client_event_thread).start()
+    threading.Thread(target=client_event_thread, daemon=True).start()
     # threading.Thread(target=backing_track_thread).start()
-    threading.Thread(target=mocap_in_thread).start()
-    threading.Thread(target=vrtp_in_thread).start()
-    threading.Thread(target=vrtp_mocap_relay).start()
-    threading.Thread(target=audio_out_thread).start()
-    threading.Thread(target=vrtp_audio_conv).start()
+    threading.Thread(target=mocap_in_thread, daemon=True).start()
+    threading.Thread(target=vrtp_in_thread, daemon=True).start()
+    threading.Thread(target=vrtp_mocap_relay, daemon=True).start()
+    threading.Thread(target=audio_out_thread, daemon=True).start()
+    threading.Thread(target=vrtp_audio_conv, daemon=True).start()
 
 
 if __name__ == '__main__':

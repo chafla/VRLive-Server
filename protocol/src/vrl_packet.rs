@@ -2,14 +2,14 @@ use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::mem::{size_of};
 
-use bytes::{Buf, BufMut, Bytes, BytesMut};
-use log::warn;
+use bytes::{BufMut, Bytes, BytesMut};
+use log::{warn};
 use rosc::{OscArray, OscBundle, OscMessage, OscPacket, OscTime, OscType};
 use rosc::encoder::encode;
 use webrtc::rtp::packet::Packet;
 
 use crate::UserIDType;
-use crate::vrm_packet::{convert_to_vrm_do_nothing, filter_vrm, FILTERED_VRM_BONES};
+use crate::vrm_packet::{convert_to_vrm_base, convert_to_vrm_do_nothing, filter_vrm, FILTERED_VRM_BONES};
 
 const ALERT_ON_FRAGMENTATION: bool = false;
 
@@ -177,20 +177,6 @@ pub enum VRTPPacket {
     Raw(Vec<OscData>, Option<RTPPacket>, UserIDType)
 }
 
-fn as_u32_be(array: &[u8]) -> u32 {
-    ((array[0] as u32) << 24) +
-        ((array[1] as u32) << 16) +
-        ((array[2] as u32) <<  8) +
-        ((array[3] as u32) <<  0)
-}
-
-fn as_u32_le(array: &[u8]) -> u32 {
-    ((array[0] as u32) <<  0) +
-        ((array[1] as u32) <<  8) +
-        ((array[2] as u32) << 16) +
-        ((array[3] as u32) << 24)
-}
-
 impl From<VRTPPacket> for Bytes {
     fn from(value: VRTPPacket) -> Self {
         match value {
@@ -228,7 +214,6 @@ impl From<VRTPPacket> for Bytes {
                 // let osc_bytes = encode(&osc).unwrap();
                 let mut osc_bytes = BytesMut::new();
                 let mut bundle_packets : Vec<OscPacket> = vec![];
-                let already_vrm = false;
                 for osc in osc_messages.into_iter() {
                     if first_timestamp.is_none() {
                         first_timestamp = Some(*&osc.bundle.timetag)
@@ -252,7 +237,15 @@ impl From<VRTPPacket> for Bytes {
                     timetag: first_timestamp.unwrap(),
                     content: bundle_packets
                 };
-                let outer_bundle = convert_to_vrm_do_nothing(&outer_bundle);
+
+                // TODO try parsing the message to determine what kind it is
+                let outer_bundle = match convert_to_vrm_base(&outer_bundle) {
+                    Err(_) => {
+                        // !("{e} Failed to convert from slime bone type, will send raw OSC as-is! VRM!");
+                        convert_to_vrm_do_nothing(&outer_bundle)
+                        },
+                    Ok(b) => b
+                };
                 let filtered_bone_list = HashSet::from(FILTERED_VRM_BONES);
                 let outer_bundle = filter_vrm(outer_bundle, &filtered_bone_list);
                 let est_bundle_size = estimate_bundle_size(&outer_bundle);
@@ -376,7 +369,7 @@ pub fn estimate_message_size(message: &OscMessage) -> usize {
         size += estimate_osc_type_size(arg);
     }
 
-    size
+    size + type_tag_size
 }
 
 fn estimate_osc_array_size(osc_array: &OscArray) -> usize {
@@ -397,7 +390,7 @@ fn estimate_osc_array_size(osc_array: &OscArray) -> usize {
 fn estimate_osc_type_size(osc_type: &OscType) -> usize {
     match osc_type {
         // see https://opensoundcontrol.stanford.edu/spec-1_0.html
-        OscType::Time(t) => 8,
+        OscType::Time(_) => 8,
         OscType::Int(_) => 4,
         OscType::Float(_) => 4,
         OscType::String(s) => {
@@ -414,7 +407,7 @@ fn estimate_osc_type_size(osc_type: &OscType) -> usize {
         // array is a bit busier, and may not be completely accurate (especially if they're nested
         // FIXME
         // add 4 onto the end tho to represent the closing version 
-        OscType::Array(a) => 4 + a.content.iter().map(|v| estimate_osc_type_size(v)).sum::<usize>(),
+        OscType::Array(a) => 4 + estimate_osc_array_size(a),
         OscType::Nil => 0,
         OscType::Inf => 0,
     }
@@ -423,7 +416,7 @@ fn estimate_osc_type_size(osc_type: &OscType) -> usize {
 
 #[cfg(test)]
 mod test {
-    use super::*;
+    // use super::*;
 
     #[test]
     fn try_decode_packet() {

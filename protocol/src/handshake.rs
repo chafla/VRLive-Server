@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use log::warn;
 use serde::{Deserialize, Serialize};
 
-use crate::{UserIDType, UserType};
+use crate::UserIDType;
 
 /// Initial message sent in response to a new connection.
 #[derive(Serialize, Deserialize, Debug)]
@@ -65,6 +65,7 @@ pub struct HandshakeSynAck {
 pub struct HandshakeCompletion {
     /// Ports for different services that should be made 
     pub extra_ports: HashMap<String, u16>,
+    /// A list of all users connected to the server. This may include the user making this handshake.
     pub other_users: Vec<AdditionalUser>
 }
 
@@ -72,7 +73,9 @@ pub struct HandshakeCompletion {
 /// Serializable struct representing data for other users.
 #[derive(Serialize, Deserialize, Debug)]
 pub struct AdditionalUser {
+    /// The user ID of a given user.
     pub user_id: UserIDType,
+    /// The user's type, as a u16.
     pub user_type: u16
 }
 
