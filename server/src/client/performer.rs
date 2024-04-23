@@ -13,6 +13,7 @@ use webrtc::track::track_local::TrackLocal;
 use protocol::handshake::ClientPortMap;
 use protocol::synchronizer::Synchronizer;
 use protocol::UserData;
+use crate::analytics::AnalyticsData;
 
 use crate::AudioPacket;
 use crate::client::{ClientChannelData, VRLClient};
@@ -36,6 +37,7 @@ pub struct Performer
     /// Channels necessary for the synchronizer.
     /// These should both be consumed at once.
     sync_channels: Option<(Receiver<OscBundle>, Receiver<AudioPacket>)>,
+    server_analytics_channel: Sender<AnalyticsData>
 
     // synchronizer: Synchronizer
 }
@@ -51,7 +53,7 @@ impl Performer {
 
     pub async fn new_rtp(
         user_data: UserData, mut base_channels: ClientChannelData, ports: ClientPortMap, signaling_channel: TcpStream,
-        audio_to_sync: Receiver<AudioPacket>, mocap_to_sync: Receiver<OscBundle>
+        audio_to_sync: Receiver<AudioPacket>, mocap_to_sync: Receiver<OscBundle>, server_analytics_channel: Sender<AnalyticsData>
     ) -> Self {
 
 
@@ -68,14 +70,15 @@ impl Performer {
             sync_channels: None,
             streaming_connection: None,
             rtp_stream: None,
-            active: Arc::new(AtomicBool::new(true))
+            active: Arc::new(AtomicBool::new(true)),
+            server_analytics_channel
         }
     }
     
     // the RTC stuff is something that I toyed around with, but it really isn't ready for primetime.
     // I wouldn't recommend using this, but the framework is there if you want to get it working at some point.
     async fn new_rtc(
-        user_data: UserData, base_channels: ClientChannelData, ports: ClientPortMap, signaling_channel: TcpStream
+        user_data: UserData, base_channels: ClientChannelData, ports: ClientPortMap, signaling_channel: TcpStream, server_analytics_channel: Sender<AnalyticsData>
     ) -> Self {
 
         let (osc_tx, osc_rx) = tokio::sync::mpsc::channel(2048);
@@ -96,7 +99,8 @@ impl Performer {
             sync_channels: Some((osc_rx, audio_rx)),
             streaming_connection: Some(Arc::new(incoming)),
             rtp_stream: None,
-            active: Arc::new(AtomicBool::new(true))
+            active: Arc::new(AtomicBool::new(true)),
+            server_analytics_channel
             // synchronizer: Synchronizer::new()
         }
     }

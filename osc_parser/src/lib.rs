@@ -16,9 +16,10 @@ pub fn add(left: usize, right: usize) -> usize {
 
 #[ffi_type]
 #[repr(C)]
-pub struct FFIOscMessage {
-    pub message_dest: *const u8,
-    pub dest_length: u16,
+pub struct FFIOscBundle {
+    pub message_count: u32,
+    pub messages: *const FFIOscMessage
+    // pub res
     // pub message_contents: *mut OscType
 }
 
@@ -26,10 +27,28 @@ pub struct FFIOscMessage {
 
 #[ffi_type]
 #[repr(C)]
-pub struct OscData {
-    pub message_count: u32,
-    pub messages: *const FFIOscMessage,
+pub struct FFIOscData {
+    pub data_type: u8,
+    pub data_items: *const u8
 }
+
+#[ffi_type]
+#[repr(C)]
+pub struct FFIOscMessage {
+    pub addr: *const u8,
+    
+    pub data: *const u8,
+    pub data_count: u32,
+}
+
+
+
+// #[ffi_type]
+// #[repr(C)]
+// pub struct OscData {
+//     pub message_count: u32,
+//     pub messages: *const FFIOscMessage,
+// }
 
 /// Flatten a bundle down to a vec
 pub fn flatten_bundle(b: OscBundle, messages: &mut Vec<OscMessage>) {
@@ -42,6 +61,26 @@ pub fn flatten_bundle(b: OscBundle, messages: &mut Vec<OscMessage>) {
         };
     }
 }
+
+pub unsafe fn parse_raw_bundle(message: *const u8, message_length: u32) -> Option<OscPacket> {
+
+    if message.is_null() {
+        return None
+    }
+    // safety: message should be a non-null byte
+    let buf: &[u8] = core::slice::from_raw_parts(message, message_length as usize);
+
+    let (_, pkt) = decode_udp(buf).expect("Invalid OSC message!");
+    Some(pkt)
+}
+// #[ffi_function]
+// #[no_mangle]
+// pub extern "C" fn parse_bundle(message: *const u8, message_length: u32) -> FFIOscBundle {
+//     
+//     unsafe {
+//         let packet = parse_raw_bundle(message, message_length);
+//     }
+// }
 
 
 // pub fn convert_message(msg: &OscMessage) -> FFIOscMessage {

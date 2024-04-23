@@ -30,6 +30,7 @@ use protocol::osc_messages_in::ClientMessage;
 use protocol::osc_messages_out::{BackingMessage, PerformerServerMessage, StatusMessage};
 use protocol::UserType;
 use protocol::vrl_packet::{OscData, VRTPPacket};
+use crate::analytics::AnalyticsData;
 
 use crate::client::{ClientChannelData, VRLClient};
 use crate::client::audience::AudienceMember;
@@ -144,6 +145,9 @@ pub struct Server {
     late_chans: Option<Arc<ServerRelayChannels<UserIDType>>>,
 
     performance_data: Arc<Mutex<PerformanceState>>,
+
+    analytics_tx: Sender<AnalyticsData>,
+    analytics_rx: Option<Receiver<AnalyticsData>>
 
     // due to how mpsc channels work, it's probably easier to include the music channel in 
 }
@@ -261,6 +265,7 @@ impl Server {
         let (server_event_tx, server_event_rx) = channel::<ServerMessage>(MAX_CHAN_SIZE);
         let (base_mocap_tx, base_mocap_rx) = channel(MAX_CHAN_SIZE);
         let (backing_track_tx, backing_track_rx) = channel(MAX_CHAN_SIZE);
+        let (analytics_tx, analytics_rx) = channel(MAX_CHAN_SIZE);
 
 
         Server {
@@ -281,7 +286,8 @@ impl Server {
             backing_track_tx,
             backing_track_rx: Some(backing_track_rx),
             late_chans: None,
-
+            analytics_rx: Some(analytics_rx),
+            analytics_tx,
             use_multicast,
             performance_data: Arc::new(Mutex::new(PerformanceState::default())),
         }
@@ -416,6 +422,11 @@ impl Server {
         // finally, backing tracks
         let chan = self.backing_track_rx.take().unwrap();
         let backing_track_chan = self.start_handler::<BackingTrackData, UserIDType>(chan, "backing track").await;
+
+        let analytics_chan = self.analytics_rx.take().expect("Analytics receiver should not have been consumed yet!");
+        tokio::spawn(async move {
+            Self::analytics_listener(analytics_chan).await;
+        });
 
         self.late_chans = Some(Arc::new(ServerRelayChannels {
             mocap_sender: mocap_chan,
@@ -621,6 +632,7 @@ impl Server {
         // let late_channels = Arc::clone(&late_channels);
 
         let server_event_sender = self.server_event_tx.clone();
+        let analytic_sender = self.analytics_tx.clone();
 
         tokio::spawn(async move {
             let late_chans_inner = Arc::clone(&late_channels);
@@ -643,6 +655,7 @@ impl Server {
                 info!("Got a new connection from {incoming_addr}");
                 // this kinda really sucks LOL
                 let server_event_sender_inner_inner = server_event_sender_inner.clone();
+                let analytic_sender_inner_inner = analytic_sender.clone();
 
                 tokio::spawn(async move {
                     // if let Some(v) = clients_by_ip_local.read().await.get(&incoming_addr.ip().to_string()) {
@@ -653,7 +666,7 @@ impl Server {
                     //     return;
                     // }
                     let chans = Arc::clone(&late_channels_outer);
-                    let res = Self::perform_handshake(socket, incoming_addr, thread_data, chans).await;
+                    let res = Self::perform_handshake(socket, incoming_addr, thread_data, chans, analytic_sender_inner_inner.clone()).await;
 
                     match res {
                         Err(e) => {
@@ -791,7 +804,7 @@ impl Server {
 
     /// Perform the handshake. If this completes, it should add a new client.
     /// If this also succeeds, then it should spin up the necessary threads for listening
-    async fn perform_handshake(mut socket: TcpStream, addr: SocketAddr, server_thread_data: ServerThreadData, registration_channels: Arc<ServerRelayChannels<UserIDType>>) -> Result<HandshakeResult, String> {
+    async fn perform_handshake(mut socket: TcpStream, addr: SocketAddr, server_thread_data: ServerThreadData, registration_channels: Arc<ServerRelayChannels<UserIDType>>, analytics_sender: Sender<AnalyticsData>) -> Result<HandshakeResult, String> {
         let our_user_id;
         let mut existing_user_type: Option<UserType> = None;
         let mut handshake_buf: [u8; HANDSHAKE_BUF_SIZE] = [0; HANDSHAKE_BUF_SIZE];
@@ -961,6 +974,7 @@ impl Server {
         let server_user_data_inner = server_user_data.clone();
         // pass off the client to handle themselves
         // I want to make this trait-based, but it seems like the types in use (particularly with async?) cause some kinda recursion in the type checker
+        let new_analytics_sender = analytics_sender.clone();
         let _ = tokio::spawn(async move {
             match server_user_data_inner.user_type {
                 UserType::Audience => {
@@ -969,6 +983,7 @@ impl Server {
                         client_channel_data,
                         synack.ports,
                         socket,
+                        new_analytics_sender
                     );
                     mem.start_main_channels().await;
                 }
@@ -980,6 +995,7 @@ impl Server {
                         socket,
                         performer_audio_rx,
                         performer_mocap_rx,
+                        new_analytics_sender
                     ).await;
                     aud.start_main_channels().await;
                 }
@@ -1107,6 +1123,24 @@ impl Server {
                 error!("Failed to pass performer mocap data to the client: {e}");
             }
         }
+    }
+
+    async fn analytics_listener(mut chan_in: Receiver<AnalyticsData>) {
+        debug!("Spinning up analytics listener.");
+
+        loop {
+            match chan_in.recv().await {
+                None => break,
+                Some(msg) => {
+                    dbg!(msg);
+                    // match msg {
+                    //     AnalyticsData::AudienceMocapMessages(i) => ;
+                    // }
+                }
+            }
+        }
+
+        debug!("Analytics listener shutting down.")
     }
 
 
