@@ -26,6 +26,7 @@ use protocol::vrl_tcp_packet::VRLTCPPacket;
 
 pub mod audience;
 pub mod performer;
+mod streaming;
 // pub mod synchronizer;
 
 
