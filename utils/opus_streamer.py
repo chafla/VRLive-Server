@@ -76,7 +76,7 @@ class WaveToOpus:
         # or hybrid modes.
 
         if self.samples_per_second != 48000:
-            print("Fuck")
+            print("guh")
 
         # if samples_per_second not in []
 
@@ -119,54 +119,6 @@ class WaveToOpus:
     # example, and then decoded with OpusDecoder.  However it
     # cannot really be saved to a file without wrapping it in the
     # likes of an Ogg stream; for this see OggOpusWriter.
-
-
-# def main():
-#     # Read a wav file to obtain PCM data
-#     filename = "howd_i_wind_up_here.mp3" if len(sys.argv) == 1 else sys.argv[1]
-#     fn, ext = path.splitext(filename)
-#
-#     if ext == ".mp3":
-#         from pydub import AudioSegment
-#         sound = AudioSegment.from_mp3(filename)
-#
-#         filename = f"{fn}.wav"
-#         sound = sound.set_frame_rate(48000)
-#         sound.export(filename, format="wav")
-#     # y, samples_per_second = librosa.load(filename, sr=48000)  # Upsample 44.1kHz
-#
-#     wave_read = wave.open(filename, "rb")
-#     print("Reading wav from file '{:s}'".format(filename))
-#     # librosa.resample()
-#
-#     # Extract the wav's specification
-#     channels = wave_read.getnchannels()
-#     print("Number of channels:", channels)
-#     samples_per_second = wave_read.getframerate()
-#     print("Sampling frequency:", samples_per_second)
-#     # librosa.
-#     # librosa.samples_to_frames(y)
-#     bytes_per_sample = wave_read.getsampwidth()
-#
-#     # Calculate the desired frame size (in samples per channel)
-#     desired_frame_duration = 20 / 1000  # milliseconds
-#     desired_frame_size = int(desired_frame_duration * samples_per_second)
-#
-#     # https://stackoverflow.com/questions/42239009/converting-wav-stream-to-opus-using-naudio
-#     # frame size must be a valid opus frame size
-#     opus_encoder = get_encoder(samples_per_second)
-#
-#     # Loop through the wav file's PCM data and encode it as Opus
-#     bytes_encoded = 0
-#     while True:
-#         pkt = get_next_packet(wave_read, opus_encoder, desired_frame_size, channels, samples_per_second, bytes_per_sample)
-#         if pkt is None:
-#             break
-#
-#     wave_read.close()
-#     # wave_write.close()
-#     print("Total bytes of encoded packets:", bytes_encoded)
-#     print("Finished.")
 
 
 if __name__ == '__main__':
