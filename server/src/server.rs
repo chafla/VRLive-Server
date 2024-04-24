@@ -1,7 +1,7 @@
 // use std::sync::mpsc::Receiver;
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt::Debug;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
@@ -15,6 +15,7 @@ use rosc::{decoder, OscBundle, OscPacket};
 use rustyline_async;
 use rustyline_async::Readline;
 use rustyline_async::ReadlineEvent::{Eof, Interrupted, Line};
+use simple_moving_average::{SingleSumSMA, SMA};
 // use serde_json::Result;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
@@ -30,7 +31,7 @@ use protocol::osc_messages_in::ClientMessage;
 use protocol::osc_messages_out::{BackingMessage, PerformerServerMessage, StatusMessage};
 use protocol::UserType;
 use protocol::vrl_packet::{OscData, VRTPPacket};
-use crate::analytics::AnalyticsData;
+use crate::analytics::{AnalyticsData, ThroughputAnalytics};
 
 use crate::client::{ClientChannelData, VRLClient};
 use crate::client::audience::AudienceMember;
@@ -525,8 +526,9 @@ impl Server {
     async fn start_performer_mocap_listener(&self) {
         let audio_in_addr = SocketAddrV4::new("0.0.0.0".parse().unwrap(), self.port_map.performer_mocap_in);
         let users_by_ip = Arc::clone(&self.clients_by_ip);
+        let analytics_chan = self.analytics_tx.clone();
         tokio::spawn(async move {
-            Self::performer_mocap_listener(&audio_in_addr, users_by_ip).await.unwrap();
+            Self::performer_mocap_listener(&audio_in_addr, users_by_ip, analytics_chan).await.unwrap();
         });
     }
 
@@ -1051,7 +1053,7 @@ impl Server {
 
     // todo this is copy pasted
     async fn performer_mocap_listener(
-        listening_addr: &SocketAddrV4, users_by_ip: Arc<RwLock<HashMap<String, ServerUserData>>>,
+        listening_addr: &SocketAddrV4, users_by_ip: Arc<RwLock<HashMap<String, ServerUserData>>>, analytics_channel: Sender<AnalyticsData>
     ) -> io::Result<()> {
         info!("Listening for performer mocap on {listening_addr}");
 
@@ -1072,6 +1074,9 @@ impl Server {
 
             // let bytes_in = bytes_in.freeze();
             trace!("Got {bytes_read} from {0}", &incoming_addr);
+
+            // try, but don't be too upset if it doesn't work
+            let _ = analytics_channel.send(AnalyticsData::Throughput(ThroughputAnalytics::PerformerOSCBytesIn(bytes_read))).await;
 
             // just forward the raw packets, do as little processing as possible
             // let datagram_data = &listener_buf[0..bytes_read];
@@ -1118,6 +1123,8 @@ impl Server {
             // let _ = performer_listener.send(pkt).await;
 
             // dbg!(&pkt);
+            
+            
 
             if let Err(e) = performer_listener.send(pkt).await {
                 error!("Failed to pass performer mocap data to the client: {e}");
@@ -1127,16 +1134,33 @@ impl Server {
 
     async fn analytics_listener(mut chan_in: Receiver<AnalyticsData>) {
         debug!("Spinning up analytics listener.");
+        
+        let mut performer_bytes_in = SingleSumSMA::<_, usize, 100>::new();
+        
+        let notification_window_ms = 10000;
+        let mut last_notification = Instant::now();
 
         loop {
             match chan_in.recv().await {
                 None => break,
                 Some(msg) => {
-                    dbg!(msg);
-                    // match msg {
-                    //     AnalyticsData::AudienceMocapMessages(i) => ;
-                    // }
+                    // dbg!(&msg);
+                    match msg {
+                        AnalyticsData::Throughput(i) => match i {
+                            ThroughputAnalytics::PerformerOSCBytesIn(b) => performer_bytes_in.add_sample(b),
+                            _ => unimplemented!()
+                        },
+                        _ => unimplemented!()
+                    }
                 }
+            }
+            
+            if (Instant::now().duration_since(last_notification).as_millis() > notification_window_ms) {
+                // notify!
+                debug!("Analytics (over last {} seconds):", notification_window_ms / 1000);
+                debug!("Average performer mocap bytes: {}", performer_bytes_in.get_average());
+                
+                last_notification = Instant::now();
             }
         }
 

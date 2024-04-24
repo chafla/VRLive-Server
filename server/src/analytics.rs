@@ -13,8 +13,9 @@ pub enum AnalyticsData {
 
 #[derive(Copy, Clone, Debug)]
 pub enum ThroughputAnalytics {
-    AudienceMocapBytesIn(u16),
-    AudienceOSCBytesIn(u16),
+    AudienceMocapBytesIn(usize),
+    AudienceOSCBytesIn(usize),
+    PerformerOSCBytesIn(usize),
     Audience
 }
 
