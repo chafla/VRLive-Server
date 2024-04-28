@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::mem::{size_of};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bytes::{BufMut, Bytes, BytesMut};
 use log::{warn};
@@ -57,7 +58,6 @@ impl RTPPacket {
     }
 
     /// Raw timestamp since zero time
-    /// TODO figure out how this corresponds to the sample rate of the audio
     pub fn timestamp(&self) -> u32 {
         self.packet.header.timestamp + self.meta.zero_time
     }
@@ -65,12 +65,19 @@ impl RTPPacket {
     pub fn osc_timestamp(&self) -> OscTime {
         // get the current clip's duration in seconds
 
-        // TODO
-        // assuming the timestamp is counted in terms of samples since the song began
-        // though since we mostly control the 
-        // let current_song_duration = self.timestamp() as f64 / self.sample_rate() as f64;
-
-        return (0, 0).into()
+        // we're assuming that our RTP timestamps are the time since 1/1/1970, but osc is weird 
+        // and uses 1/1/1900 as its epoch
+        // but hey, they've got fractional seconds so whatever
+        // let seconds_since_epoch = SystemTime::now().duration_since(UNIX_EPOCH).expect("Time is backwards somehow");
+        // let seconds_since_epoch = self.packet.header.timestamp;
+        // get the time from our current unix timestamp
+        // dbg!(&self.packet.header);
+        let time = Duration::from_secs(self.packet.header.timestamp as u64);
+        let seconds_inbetween = 2_208_988_800f64;  // I checked this and it's probably accurate. Seconds between 1900 and 1970
+        let frac_secs = time.as_secs_f64() + seconds_inbetween;
+        let res = (frac_secs.trunc() as u32, (frac_secs.fract() * 10e8) as u32).into();
+        // dbg!(&res);
+        res
 
 
     }
@@ -82,6 +89,21 @@ impl RTPPacket {
     pub fn metadata(&self) -> &RTPStreamInfo {
         &self.meta
     }
+}
+
+#[allow(dead_code)]
+fn get_current_timestamp() -> OscTime {
+    // get the current clip's duration in seconds
+
+    // we're assuming that our RTP timestamps are the time since 1/1/1970, but osc is weird 
+    // and uses 1/1/1900 as its epoch
+    // but hey, they've got fractional seconds so whatever
+    let seconds_since_epoch = SystemTime::now().duration_since(UNIX_EPOCH).expect("Time is backwards somehow");
+    let seconds_inbetween = 2_208_988_800f64;  // I checked this and it's probably accurate. Seconds between 1900 and 1970
+    let frac_secs = seconds_since_epoch.as_secs_f64() + seconds_inbetween;
+    let res = (frac_secs.trunc() as u32, (frac_secs.fract() * 10e8) as u32).into();
+    // dbg!(&res);
+    res
 }
 
 impl PartialEq for RTPPacket {
