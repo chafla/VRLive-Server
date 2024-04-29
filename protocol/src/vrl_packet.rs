@@ -61,25 +61,13 @@ impl RTPPacket {
     pub fn timestamp(&self) -> u32 {
         self.packet.header.timestamp + self.meta.zero_time
     }
+    
+    fn calculate_timestamp_offset_seconds(&self) -> f64 {
+        self.packet.header.timestamp as f64 / self.sample_rate() as f64 + self.meta.zero_time as f64
+    }
 
     pub fn osc_timestamp(&self) -> OscTime {
-        // get the current clip's duration in seconds
-
-        // we're assuming that our RTP timestamps are the time since 1/1/1970, but osc is weird 
-        // and uses 1/1/1900 as its epoch
-        // but hey, they've got fractional seconds so whatever
-        // let seconds_since_epoch = SystemTime::now().duration_since(UNIX_EPOCH).expect("Time is backwards somehow");
-        // let seconds_since_epoch = self.packet.header.timestamp;
-        // get the time from our current unix timestamp
-        // dbg!(&self.packet.header);
-        let time = Duration::from_secs(self.packet.header.timestamp as u64);
-        let seconds_inbetween = 2_208_988_800f64;  // I checked this and it's probably accurate. Seconds between 1900 and 1970
-        let frac_secs = time.as_secs_f64() + seconds_inbetween;
-        let res = (frac_secs.trunc() as u32, (frac_secs.fract() * 10e8) as u32).into();
-        // dbg!(&res);
-        res
-
-
+        osc_timestamp_from_unix(self.packet.header.timestamp as u64)
     }
 
     pub fn packet(&self) -> &Packet {
@@ -92,17 +80,22 @@ impl RTPPacket {
 }
 
 #[allow(dead_code)]
-fn get_current_timestamp() -> OscTime {
-    // get the current clip's duration in seconds
+pub fn get_current_timestamp() -> OscTime {
+    calculate_osc_timestamp(SystemTime::now().duration_since(UNIX_EPOCH).expect("Time is backwards somehow"))
+}
 
-    // we're assuming that our RTP timestamps are the time since 1/1/1970, but osc is weird 
-    // and uses 1/1/1900 as its epoch
-    // but hey, they've got fractional seconds so whatever
-    let seconds_since_epoch = SystemTime::now().duration_since(UNIX_EPOCH).expect("Time is backwards somehow");
-    let seconds_inbetween = 2_208_988_800f64;  // I checked this and it's probably accurate. Seconds between 1900 and 1970
-    let frac_secs = seconds_since_epoch.as_secs_f64() + seconds_inbetween;
+#[allow(dead_code)]
+pub fn osc_timestamp_from_unix(timestamp: u64) -> OscTime {
+    // get the current clip's duration in seconds
+    calculate_osc_timestamp(Duration::from_secs(timestamp))
+}
+
+fn calculate_osc_timestamp(duration_since_epoch: Duration) -> OscTime {
+    // we're assuming that our RTP timestamps are the time since 1/1/1970, but osc is weird
+    // and uses 1/1/1900 as its epoch, so we need to add a few extra seconds.
+    let seconds_inbetween = 2_208_988_800f64;  // time between the two dates.
+    let frac_secs = duration_since_epoch.as_secs_f64() + seconds_inbetween;
     let res = (frac_secs.trunc() as u32, (frac_secs.fract() * 10e8) as u32).into();
-    // dbg!(&res);
     res
 }
 
@@ -236,6 +229,8 @@ impl From<VRTPPacket> for Bytes {
                 // let osc_bytes = encode(&osc).unwrap();
                 let mut osc_bytes = BytesMut::new();
                 let mut bundle_packets : Vec<OscPacket> = vec![];
+
+
                 for osc in osc_messages.into_iter() {
                     if first_timestamp.is_none() {
                         first_timestamp = Some(*&osc.bundle.timetag)
@@ -245,44 +240,43 @@ impl From<VRTPPacket> for Bytes {
                     bundle_packets.push(pkt);
                 }
 
-
                 if bundle_packets.len() == 0 && rtp.is_none() {
                     return Bytes::new()  // empty
                 }
-
-                if first_timestamp.is_none() {
-                    // we don't have any timestamps???
-                    // TODO find out how we best want to handle this???
-                    panic!("No timestamp, but we have packets of some kind!")
-                }
-                let outer_bundle = OscBundle {
-                    timetag: first_timestamp.unwrap(),
-                    content: bundle_packets
-                };
-
-                // TODO try parsing the message to determine what kind it is
-                let outer_bundle = match convert_to_vrm_base(&outer_bundle) {
-                    Err(_) => {
-                        // !("{e} Failed to convert from slime bone type, will send raw OSC as-is! VRM!");
-                        convert_to_vrm_do_nothing(&outer_bundle)
-                        },
-                    Ok(b) => b
-                };
-                let filtered_bone_list = HashSet::from(FILTERED_VRM_BONES);
-                let outer_bundle = filter_vrm(outer_bundle, &filtered_bone_list);
-                let est_bundle_size = estimate_bundle_size(&outer_bundle);
                 
-                let bundle_packed = encode(&OscPacket::Bundle(outer_bundle)).unwrap();
-                osc_bytes.put(bundle_packed.as_slice());
-                let osc_size = osc_bytes.len();
+                if bundle_packets.len() > 0 {
+                    if first_timestamp.is_none() {
+                        // we don't have any timestamps???
+                        // TODO find out how we best want to handle this???
+                        panic!("No timestamp, but we have packets of some kind!")
+                    }
 
+                    let outer_bundle = OscBundle {
+                        timetag: first_timestamp.unwrap(),
+                        content: bundle_packets
+                    };
 
+                    // TODO try parsing the message to determine what kind it is
+                    let outer_bundle = match convert_to_vrm_base(&outer_bundle) {
+                        Err(_) => {
+                            // !("{e} Failed to convert from slime bone type, will send raw OSC as-is! VRM!");
+                            convert_to_vrm_do_nothing(&outer_bundle)
+                        },
+                        Ok(b) => b
+                    };
+                    let filtered_bone_list = HashSet::from(FILTERED_VRM_BONES);
+                    let outer_bundle = filter_vrm(outer_bundle, &filtered_bone_list);
 
+                    let bundle_packed = encode(&OscPacket::Bundle(outer_bundle)).unwrap();
+                    osc_bytes.put(bundle_packed.as_slice());
+                }
+                
+                
                 // 4 from
                 // 2 - 16 bit
                 let pkt_size =
                         audio_size          // size of the audio payload
-                        + osc_size          // size of the osc payload
+                        + osc_bytes.len()          // size of the osc payload
                         + size_of::<u32>()  // size of this variable, pkt_size
                         + size_of::<u16>()  // size of audio_size
                         + size_of::<u16>()  // size of osc_size
@@ -295,18 +289,15 @@ impl From<VRTPPacket> for Bytes {
                 // TODO find a way to ensure packets don't exceed mtu
                 // assert!(pkt_size < 1400);
 
-
-
+                
                 // let mut bytes_out = BytesMut::with_capacity(pkt_size);
                 // preface with the total sizes
                 bytes_out.put_u32(pkt_size as u32);
-                bytes_out.put_u16(osc_size as u16);
+                bytes_out.put_u16(osc_bytes.len() as u16);
                 bytes_out.put_u16(audio_size as u16);
                 bytes_out.put_u16(user_id as u16);
                 bytes_out.put_f32(backing_track_position);
-
-                // dbg!(&osc_bytes);
-
+                
                 bytes_out.put(osc_bytes);
 
                 if let Some(pkt) = &rtp {
@@ -318,7 +309,6 @@ impl From<VRTPPacket> for Bytes {
 
                 if bytes_out.len() > 1400 && ALERT_ON_FRAGMENTATION {
                     warn!("An outgoing packet was over 1400 bytes in size (actual size: {}) and may be fragmented!", bytes_out.len());
-                    warn!("Estimated bundle size was {est_bundle_size}");
                 }
 
 
