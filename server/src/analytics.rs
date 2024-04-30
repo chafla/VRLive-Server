@@ -1,6 +1,3 @@
-use std::time::SystemTime;
-use tokio::time::Instant;
-
 // Tracking for events.
 // Unless stated otherwise, these are evaluated per second.
 #[derive(Clone, Debug)]
@@ -28,12 +25,5 @@ pub enum ClientAnalytics {
 pub enum InternalAnalytics {
 
 }
-
-/// Analytics struct managed by the handler to facilitate with measurements
-pub struct AnalyticsEvent {
-    time: Instant,
-    event: AnalyticsData
-}
-
 
 

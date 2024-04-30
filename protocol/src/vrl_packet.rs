@@ -156,10 +156,9 @@ impl OscData {
 
 impl From<OscData> for Bytes {
     fn from(value: OscData) -> Bytes {
-        // TODO in a more perfect world, we would have encoded the User ID into the message address, but we would need to rework a substantial portion of what we have now to support that
+        // in a more perfect world, we would have encoded the User ID into the message address, but we would need to rework a substantial portion of what we have now to support that
         let uid =  value.user_id;
         let pkt = VRTPPacket::Raw(vec![value], None, uid);
-        // let packet = OscPacket::Bundle(value.bundle);
         pkt.into()
     }
 }
@@ -211,7 +210,6 @@ impl From<VRTPPacket> for Bytes {
                 let mut backing_track_position = -1f32;
 
                 if let Some(pkt) = &rtp {
-                    // TODO deal with this sample rate
                     first_timestamp = Some(pkt.osc_timestamp());
                     if pkt.packet.header.extension && pkt.packet.header.extension_profile == VRL_RTP_PACKET_HEADER_ID {
                         // we are working with a proper VRL RTP packet, the backing track position is stored within
@@ -219,7 +217,6 @@ impl From<VRTPPacket> for Bytes {
                         let vrtp_extension = &pkt.packet.header.extensions[0];
                         let bytes: [u8; 4] = vrtp_extension.payload[0..4].try_into().expect("Were not four bytes in this 4 byte range (somehow");
                         backing_track_position = f32::from_le_bytes(bytes);
-                        // dbg!(&backing_track_position);
                     }
 
                 }
@@ -246,8 +243,6 @@ impl From<VRTPPacket> for Bytes {
                 
                 if bundle_packets.len() > 0 {
                     if first_timestamp.is_none() {
-                        // we don't have any timestamps???
-                        // TODO find out how we best want to handle this???
                         panic!("No timestamp, but we have packets of some kind!")
                     }
 
@@ -259,7 +254,6 @@ impl From<VRTPPacket> for Bytes {
                     // TODO try parsing the message to determine what kind it is
                     let outer_bundle = match convert_to_vrm_base(&outer_bundle) {
                         Err(_) => {
-                            // !("{e} Failed to convert from slime bone type, will send raw OSC as-is! VRM!");
                             convert_to_vrm_do_nothing(&outer_bundle)
                         },
                         Ok(b) => b
@@ -287,10 +281,7 @@ impl From<VRTPPacket> for Bytes {
                 // provide two bytes for the size of our total payload
 
                 // TODO find a way to ensure packets don't exceed mtu
-                // assert!(pkt_size < 1400);
-
                 
-                // let mut bytes_out = BytesMut::with_capacity(pkt_size);
                 // preface with the total sizes
                 bytes_out.put_u32(pkt_size as u32);
                 bytes_out.put_u16(osc_bytes.len() as u16);
@@ -310,44 +301,12 @@ impl From<VRTPPacket> for Bytes {
                 if bytes_out.len() > 1400 && ALERT_ON_FRAGMENTATION {
                     warn!("An outgoing packet was over 1400 bytes in size (actual size: {}) and may be fragmented!", bytes_out.len());
                 }
-
-
-                // let packets = vec![];
-
-                // TODO WORK OUT PROTOCOL FOR THIS
-
-                // let min_data_size = osc_bytes.len() + audio.len() + timestamp.to_ne_bytes().len();
-                //
-                // // all the space we need + a bit of a buffer
-                //
-                // assert!(bytes_out.len() < 1400);  // it needs to be less than the standard mtu or we're in trouble
-                //
-                // // if it's larger we definitely have problems we need to clear up
-                // // anyway, preface with a u16 denoting the number of bytes the OSC message will take up
-                // bytes_out.put_u16(osc_bytes.len() as u16);
-                // // followed by the number of bytes the data itself will take
-                // bytes_out.put_u16(audio.len() as u16);
-                // // and lastly the timestamp in f32 form
-                // bytes_out.put_f32(timestamp);
-                // // now the data
-                // // osc first
-                // bytes_out.put(osc_bytes.as_slice());
-                // // followed soon after by the audio
-                // bytes_out.put(audio);
-
-                // it's set, freeze it and punt it
-                // bytes_out.freeze();
+                
                 bytes_out.freeze()
             }
         }
     }
 }
-
-// pub struct CompressedOscMessage {
-//
-// }
-
-
 
 /// Estimate the size of an OSC bundle, given the spec.
 pub fn estimate_bundle_size(bundle: &OscBundle) -> usize {
@@ -362,7 +321,6 @@ pub fn estimate_bundle_size(bundle: &OscBundle) -> usize {
             OscPacket::Message(msg) => estimate_message_size(msg),
             OscPacket::Bundle(b) => estimate_bundle_size(b)
         }
-        // size += estimate_message_size(message);
     }
 
 
@@ -423,31 +381,4 @@ fn estimate_osc_type_size(osc_type: &OscType) -> usize {
         OscType::Nil => 0,
         OscType::Inf => 0,
     }
-}
-
-
-#[cfg(test)]
-mod test {
-    // use super::*;
-
-    #[test]
-    fn try_decode_packet() {
-        // todo
-    }
-    // fn try_create_server_message() {
-    //     let message = ServerMessage::Performer(PerformerServerMessage::Ready(true));
-    //
-    //     let encoded = message.to_message(vec!["".to_owned()]);
-    //     let unencoded = ServerMessage::from_osc_message(&encoded);
-    //     dbg!(&unencoded);
-    //     if let Some(server_msg) = &unencoded {
-    //         let reencoded = server_msg.to_message(vec!["".to_owned()]);
-    //         let reunencoded = ServerMessage::from_osc_message(&reencoded);
-    //         assert_eq!(reencoded.addr, encoded.addr);
-    //         assert_eq!(&reunencoded, &unencoded);
-    //     }
-    //     else {
-    //         panic!("Object was not re-encoded")
-    //     }
-    // }
 }

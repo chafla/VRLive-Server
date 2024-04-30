@@ -176,7 +176,6 @@ pub trait VRLClient {
 
             trace!("{label} client transmitter sending data out to {}!", &target_addr);
 
-            // dbg!(&msg);
             let msg_bytes: Bytes = msg.into();
             
             if msg_bytes.len() == 0 {
@@ -228,7 +227,7 @@ pub trait VRLClient {
                         heartbeat_status_out.send(Hangup(e.to_string())).await.unwrap();
                         break;
                     }
-                    let incoming_msg = &sock_buf[0..incoming_bytes.unwrap()];
+                    let _ = &sock_buf[0..incoming_bytes.unwrap()];
                     // todo process this to read disconnects
 
 
@@ -300,12 +299,6 @@ pub trait VRLClient {
                             continue;
                         }
                     }
-
-
-
-                    // let sent = client_stream.write(&packet).await;
-
-
                 }
             }
         }
@@ -313,9 +306,7 @@ pub trait VRLClient {
         debug!("Shutting down server event sender");
 
     }
-
-    // async fn synchronizer_loop(mocap_in: Receiver<OscPacket>, audio_in: Receiver<Bytes>)
-
+    
     /// Thread handling input for any client events.
     async fn client_event_listener(label: &'static str, client_events_out: Sender<ClientMessage>, mut stream_sock: Receiver<TcpStream>) {
 

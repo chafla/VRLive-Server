@@ -1,6 +1,6 @@
+#![allow(dead_code)]
 
 
-#[allow(dead_code)]
 // TODO actually implement this
 
 #[derive(Clone, Debug, Default)]

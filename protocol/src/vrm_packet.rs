@@ -43,17 +43,9 @@ fn slime_id_to_body_part<T>(message: &OscMessage, id_mapping: T) -> Result<Slime
         return Err(format!("Input {} does not appear to be slimeVR mapping!", message.addr))
     }
     
-    
     let mut msg_parts = message.addr.split("/");
-    // dbg!(msg_parts.nth(2));  // just pull the end off
     msg_parts.nth(2);  // consume the starting message
     
-    // dbg!(&msg_parts);
-
-    // leads with an empty string
-    // if !matches!(msg_parts.next(), Some("")) || !matches!(msg_parts.next(), Some("tracking")) || !matches!(msg_parts.next(), Some("trackers")) {
-    
-    // todo clean this up
     let part = if let Some(part) = msg_parts.next() {
         if let Ok(id) = part.parse() {
             SlimeVRTarget::Tracker(id_mapping(id))
@@ -209,8 +201,6 @@ pub const FILTERED_VRM_BONES: [&str; 32] = [
     "RightLittleDistal",
 ];
 
-// const FILTERED_ITEMS: HashSet<&str> = HashSet::from(FILTERED_ITEM_LIST);
-
 /// Filter a vrm packet for data that we really don't want or care about.
 pub fn filter_vrm(b: OscBundle, filtered_items: &HashSet<&str>) -> OscBundle {
     let mut messages = vec![];
@@ -231,8 +221,6 @@ pub fn filter_vrm(b: OscBundle, filtered_items: &HashSet<&str>) -> OscBundle {
                     },
                     _ => messages.push(OscPacket::Message(m))
                 }
-                // m.
-
             }
         };
     }
@@ -269,9 +257,6 @@ fn convert_to_vrm<T>(b: &OscBundle, as_format: &OutputMessageFormat, converter: 
                     Position(x, y, z) => entry.position = (x, y, z)
                 }
                 entry.dest = msg_addr;
-                // if entry.dest.is_none() {
-                //     entry.dest = converted_message.
-                // }
             }
         };
     };

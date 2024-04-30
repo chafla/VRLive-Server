@@ -1,7 +1,7 @@
 // use std::sync::mpsc::Receiver;
 
 use std::borrow::Cow;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap};
 use std::fmt::Debug;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
@@ -49,10 +49,7 @@ const AUDIO_LISTENER_BUF_SIZE: usize = 10000;
 
 const MOCAP_LISTENER_BUF_SIZE: usize = 10000;
 
-const AUDIENCE_BUFFER_CHAN_SIZE: usize = DEFAULT_CHAN_SIZE;
 
-const AUDIENCE_MOCAP_MULTICAST_ADDR: &str = "226.226.226.226";
-const VRTP_MULTICAST_ADDR: &str = "226.226.226.227";
 
 
 /// Data stored for each client.
@@ -209,6 +206,7 @@ impl<T, U> Listener<T, U>
     }
 
     /// Insert a new user.
+    #[allow(dead_code)]
     pub fn insert(&mut self, user: U, sender: Sender<T>) {
         self.client_channels.push((user, sender));
     }
@@ -293,11 +291,7 @@ impl Server {
             performance_data: Arc::new(Mutex::new(PerformanceState::default())),
         }
     }
-
-    fn get_host(&self) -> &str {
-        return &self.host;
-    }
-
+    
 
     pub async fn main_server_loop(&mut self) {
 
@@ -442,14 +436,6 @@ impl Server {
 
         self.main_server_loop().await;
         Ok(())
-    }
-
-    fn get_ip(&self, multicast_ip: &str, default_ip: &str) -> Ipv4Addr {
-        if self.use_multicast {
-            let res: Ipv4Addr = multicast_ip.parse().unwrap();
-            assert!(res.is_multicast(), "Must be multcast address");
-            res
-        } else { default_ip.parse().unwrap() }
     }
 
     /// Drop a user entirely, removing all of their data and unsubscribing them from everything.
@@ -704,34 +690,6 @@ impl Server {
         Ok(())
     }
 
-    // /// Dispatch data to a UDP socket at a given location.
-    // async fn udp_data_dispatch<T, F>(socket_addr: &SocketAddrV4, mut listener_channel: Receiver<T>, data_to_bytes: F) -> io::Result<()>
-    //     where
-    //         T: Send + Sync,
-    //         F: Fn(T) -> Bytes,
-    // {
-    //
-    //
-    //     debug!("Ready to transmit synchronized data on {socket_addr}");
-    //
-    //     let sock = UdpSocket::bind(socket_addr).await?;
-    //
-    //     loop {
-    //         let pkt = match listener_channel.recv().await {
-    //             None => break,
-    //             Some(data) => data_to_bytes(data)
-    //         };
-    //
-    //         sock.send(&pkt).await?;
-    //
-    //
-    //     }
-    //
-    //     Ok(())
-    //
-    //
-    // }
-
     /// Take in motion capture from audience members and sent it out as soon as we can.
     /// Audience members don't really need to worry about sending to specific "clients",
     /// instead they can just forward their data on here, and it will be repeated to any audience members listening.
@@ -758,13 +716,11 @@ impl Server {
             // just forward the raw packets, do as little processing as possible
             let datagram_data = &listener_buf[0..bytes_read];
 
-            // debug!("Got audience mocap data from {addr_in}");
             let user_id = {
                 let lock = &users_by_ip.read().await;
                 let audience_member_client = lock.get(&addr_in.ip().to_string());
                 match audience_member_client {
                     None => {
-                        // warn!("Got audience mocap from someone we haven't handshaked with!");
                         continue;
                     }
                     Some(d) => d.base_user_data.participant_id
@@ -783,26 +739,12 @@ impl Server {
                 }
                 Ok((_, OscPacket::Bundle(b))) => b
             };
-
-            // debug!("Echoing audience mocap!");
-
+            
             let osc_data = OscData::new(pkt, user_id);
 
             let _ = listener_channel.send(osc_data).await;
         }
     }
-
-    async fn dispatch_server_event(&self, message: &ServerMessage) {
-        if self.server_event_tx.send(message.clone()).await.is_err() {
-            panic!("Failed to send server message!")
-        }
-    }
-
-    // async fn handle_reconnect(server_data: &ServerUserData, user_data: &UserData) {
-    //     // user_data.
-    // 
-    // }
-
 
     /// Perform the handshake. If this completes, it should add a new client.
     /// If this also succeeds, then it should spin up the necessary threads for listening
@@ -886,8 +828,7 @@ impl Server {
         }
 
         // even if they're reconnecting, we need to handshake
-
-
+        
         let mut all_other_users = vec![];
         // gather all of the other users
         {
@@ -902,8 +843,7 @@ impl Server {
                 });
             }
         }
-
-
+        
         // send out our last part of the handshake
         let handshake_finish = HandshakeCompletion {
             extra_ports: server_thread_data.extra_ports.as_ref().clone(),
@@ -984,7 +924,6 @@ impl Server {
                         server_user_data_inner.base_user_data.clone(),
                         client_channel_data,
                         synack.ports,
-                        socket,
                         new_analytics_sender
                     );
                     mem.start_main_channels().await;
@@ -994,7 +933,6 @@ impl Server {
                         server_user_data_inner.base_user_data.clone(),
                         client_channel_data,
                         synack.ports,
-                        socket,
                         performer_audio_rx,
                         performer_mocap_rx,
                         new_analytics_sender
@@ -1050,8 +988,6 @@ impl Server {
         }
     }
 
-
-    // todo this is copy pasted
     async fn performer_mocap_listener(
         listening_addr: &SocketAddrV4, users_by_ip: Arc<RwLock<HashMap<String, ServerUserData>>>, analytics_channel: Sender<AnalyticsData>
     ) -> io::Result<()> {
@@ -1118,14 +1054,6 @@ impl Server {
                 Ok((_, OscPacket::Bundle(bndl))) => bndl
             };
 
-            // debug!("Echoing audience mocap!");
-
-            // let _ = performer_listener.send(pkt).await;
-
-            // dbg!(&pkt);
-            
-            
-
             if let Err(e) = performer_listener.send(pkt).await {
                 error!("Failed to pass performer mocap data to the client: {e}");
             }
@@ -1144,7 +1072,6 @@ impl Server {
             match chan_in.recv().await {
                 None => break,
                 Some(msg) => {
-                    // dbg!(&msg);
                     match msg {
                         AnalyticsData::Throughput(i) => match i {
                             ThroughputAnalytics::PerformerOSCBytesIn(b) => performer_bytes_in.add_sample(b),
@@ -1155,7 +1082,7 @@ impl Server {
                 }
             }
             
-            if (Instant::now().duration_since(last_notification).as_millis() > notification_window_ms) {
+            if Instant::now().duration_since(last_notification).as_millis() > notification_window_ms {
                 // notify!
                 debug!("Analytics (over last {} seconds):", notification_window_ms / 1000);
                 debug!("Average performer mocap bytes: {}", performer_bytes_in.get_average());
@@ -1174,11 +1101,9 @@ impl Server {
         info!("Listening for performer audio on {listening_addr}");
 
         let sock = UdpSocket::bind(listening_addr).await?;
-        // let mut bytes_in;
-        let mut listener_buf: [u8; AUDIO_LISTENER_BUF_SIZE];// = [0; LISTENER_BUF_SIZE];
+        let mut listener_buf: [u8; AUDIO_LISTENER_BUF_SIZE];
         let mut last_notice = Instant::now();
         loop {
-            // bytes_in = bytes::BytesMut::with_capacity(4096);
             listener_buf = [0; AUDIO_LISTENER_BUF_SIZE];
             let (bytes_read, incoming_addr) = match sock.recv_from(&mut listener_buf).await {
                 Err(e) => {
@@ -1188,18 +1113,8 @@ impl Server {
                 Ok(b) => b
             };
 
-            // let bytes_in = bytes_in.freeze();
             trace!("Got {bytes_read} audio bytes from {0}", &incoming_addr);
-
-            // dbg!(&listener_buf[0..bytes_read]);
-            // just forward the raw packets, do as little processing as possible
-            // let datagram_data = &listener_buf[0..bytes_read];
-
-            // this is going to be problematic.
-            // If we have a read lock on this data structure that is held every single time RTP data is coming in over
-            // the stream, we're going to get deadlocked FAST, and the writers (new clients being added) will cause this
-            // all to slow to a slog.
-            // dbg!(&users_by_ip.read().await);
+            
             let performer_listener = match users_by_ip.read().await.get(&incoming_addr.ip().to_string()) {
                 None => {
                     if (Instant::now() - last_notice).as_secs() > 5 {
