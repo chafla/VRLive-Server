@@ -23,6 +23,7 @@ pub struct RTPStreamInfo {
     /// This should be in unix time
     zero_time: u32,
     /// Clock rates are variable as well. Should give us a good safe conversion factor
+    #[allow(unused)]
     clock_rate: f32
 }
 
@@ -62,6 +63,7 @@ impl RTPPacket {
         self.packet.header.timestamp + self.meta.zero_time
     }
     
+    #[allow(dead_code)]
     fn calculate_timestamp_offset_seconds(&self) -> f64 {
         self.packet.header.timestamp as f64 / self.sample_rate() as f64 + self.meta.zero_time as f64
     }

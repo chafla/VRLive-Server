@@ -17,10 +17,7 @@ struct Args {
     host: String,
     #[arg(short, long)]
     /// Our main incoming connections port
-    port: u16,
-    #[arg(short, long)]
-    /// Whether or not we want to use udp multicast
-    multicast: bool
+    port: u16
 }
 
 
@@ -42,7 +39,7 @@ async fn main() {
     };
     // server::server::Portmap
     let mut server = Server::new(
-        args.host, port_map, args.multicast
+        args.host, port_map
     );
 
     let _ = server.start().await;

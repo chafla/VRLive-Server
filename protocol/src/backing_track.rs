@@ -11,6 +11,7 @@ use crate::vrl_tcp_packet::VRLTCPPacket;
 #[derive(Clone, Debug)]
 pub struct BackingTrackData {
     data: Bytes,
+    #[allow(dead_code)]
     filename: String,
 }
 
@@ -45,7 +46,8 @@ impl BackingTrackData {
     pub fn get_data(&self) -> &Bytes {
         &self.data
     }
-    
+
+    #[allow(dead_code)]
     fn get_filename(&self) -> &str {
         &self.filename
     }

@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::collections::{HashMap};
 use std::fmt::Debug;
 use std::io;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::{SocketAddr, SocketAddrV4};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Instant;
@@ -27,7 +27,6 @@ use webrtc::util::Unmarshal;
 use protocol::{osc_messages_out::ServerMessage, UserData, UserIDType};
 use protocol::backing_track::BackingTrackData;
 use protocol::handshake::{AdditionalUser, HandshakeAck, HandshakeCompletion, HandshakeSynAck, ServerPortMap};
-use protocol::osc_messages_in::ClientMessage;
 use protocol::osc_messages_out::{BackingMessage, PerformerServerMessage, StatusMessage};
 use protocol::UserType;
 use protocol::vrl_packet::{OscData, VRTPPacket};
@@ -36,7 +35,7 @@ use crate::analytics::{AnalyticsData, ThroughputAnalytics};
 use crate::client::{ClientChannelData, VRLClient};
 use crate::client::audience::AudienceMember;
 use crate::client::performer;
-use crate::MAX_CHAN_SIZE;
+use crate::{ClientMessageChannelType, MAX_CHAN_SIZE};
 use crate::performance::PerformanceState;
 
 // use crate::client::synchronizer::OscData;
@@ -48,7 +47,6 @@ const HANDSHAKE_BUF_SIZE: usize = DEFAULT_CHAN_SIZE;
 const AUDIO_LISTENER_BUF_SIZE: usize = 10000;
 
 const MOCAP_LISTENER_BUF_SIZE: usize = 10000;
-
 
 
 
@@ -92,7 +90,7 @@ pub struct ServerThreadData {
     ports: ServerPortMap,
     /// The channel that should be cloned by everyone looking to send something to the
     synchronizer_to_out_tx: Sender<VRTPPacket>,
-    client_events_in_tx: Sender<ClientMessage>,
+    client_events_in_tx: Sender<ClientMessageChannelType>,
     /// The current minimum user ID.
     cur_user_id: Arc<Mutex<AtomicU16>>,
     /// Current set of users.
@@ -124,9 +122,9 @@ pub struct Server {
     synchronizer_to_out_rx: Option<Receiver<VRTPPacket>>,
 
     /// Client events should be sent from their constituent threads through this
-    client_event_in_tx: Sender<ClientMessage>,
+    client_event_in_tx: Sender<ClientMessageChannelType>,
     /// Input channel for client events, which should be managed by a global event thread
-    client_event_in_rx: Option<Receiver<ClientMessage>>,
+    client_event_in_rx: Option<Receiver<ClientMessageChannelType>>,
 
     /// Server event handlers.
     server_event_tx: Sender<ServerMessage>,
@@ -138,8 +136,6 @@ pub struct Server {
     /// Backing track handlers
     backing_track_tx: Sender<BackingTrackData>,
     backing_track_rx: Option<Receiver<BackingTrackData>>,
-    /// Whether we are using UDP multicast for our listeners.
-    use_multicast: bool,
     late_chans: Option<Arc<ServerRelayChannels<UserIDType>>>,
 
     performance_data: Arc<Mutex<PerformanceState>>,
@@ -258,9 +254,9 @@ impl<T> ServerRelayChannels<T>
 }
 
 impl Server {
-    pub fn new(host: String, port_map: ServerPortMap, use_multicast: bool) -> Self {
+    pub fn new(host: String, port_map: ServerPortMap) -> Self {
         let (sync_out_tx, sync_out_rx) = channel::<VRTPPacket>(MAX_CHAN_SIZE);
-        let (client_in_tx, client_in_rx) = channel::<ClientMessage>(MAX_CHAN_SIZE);
+        let (client_in_tx, client_in_rx) = channel::<ClientMessageChannelType>(MAX_CHAN_SIZE);
         let (server_event_tx, server_event_rx) = channel::<ServerMessage>(MAX_CHAN_SIZE);
         let (base_mocap_tx, base_mocap_rx) = channel(MAX_CHAN_SIZE);
         let (backing_track_tx, backing_track_rx) = channel(MAX_CHAN_SIZE);
@@ -287,7 +283,6 @@ impl Server {
             late_chans: None,
             analytics_rx: Some(analytics_rx),
             analytics_tx,
-            use_multicast,
             performance_data: Arc::new(Mutex::new(PerformanceState::default())),
         }
     }
@@ -433,6 +428,7 @@ impl Server {
         self.new_connection_listener(Arc::clone(&self.late_chans.as_ref().unwrap())).await.unwrap();
         self.start_performer_audio_listener().await;
         self.start_performer_mocap_listener().await;
+        self.start_client_event_listener().await;
 
         self.main_server_loop().await;
         Ok(())
@@ -688,6 +684,38 @@ impl Server {
         });
 
         Ok(())
+    }
+
+    async fn start_client_event_listener(&mut self) {
+        let listener_channel = self.client_event_in_rx.take().expect("Client event receiver was consumed before the server could use it!");
+        let users_by_id_clone = Arc::clone(&self.clients);
+        
+        tokio::spawn(async move {
+            Self::client_event_listener(listener_channel, users_by_id_clone).await;
+        });
+    }
+    
+    async fn client_event_listener(mut listener_channel: Receiver<ClientMessageChannelType>, users_by_id: Arc<RwLock<HashMap<UserIDType, ServerUserData>>>) {
+        debug!("Server's client event listener is ready!");
+        loop {
+            let (user_id, msg) = match listener_channel.recv().await {
+                Some(msg) => msg,
+                None => break
+            };
+            
+            let user_lock = users_by_id.read().await;
+            let user = match user_lock.get(&user_id) {
+                Some(u) => u,
+                None => {
+                    warn!("Got a client message from someone who doesn't seem to be tracked, user id {user_id}");
+                    continue;
+                }
+            };
+            info!("Server received client message {:?} from user {user_id} with type {:?}", msg, user.user_type);
+            warn!("We currently don't have any handling for client messages!")
+        }
+        
+        
     }
 
     /// Take in motion capture from audience members and sent it out as soon as we can.

@@ -11,7 +11,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::mpsc::{Receiver, Sender};
 
-use protocol::{OSCDecodable, OSCEncodable, UserData};
+use protocol::{OSCDecodable, OSCEncodable, UserData, UserIDType};
 use protocol::backing_track::BackingTrackData;
 use protocol::handshake::ClientPortMap;
 use protocol::heartbeat::HeartbeatStatus;
@@ -20,6 +20,7 @@ use protocol::osc_messages_in::ClientMessage;
 use protocol::osc_messages_out::ServerMessage;
 use protocol::vrl_packet::{OscData, VRTPPacket};
 use protocol::vrl_tcp_packet::VRLTCPPacket;
+use crate::ClientMessageChannelType;
 
 // use crate::client::synchronizer::OscData;
 // use protocol::syn
@@ -41,7 +42,7 @@ pub struct ClientChannelData {
     /// Get backing track data to send out to our connected server.
     pub backing_track_in: Option<Receiver<BackingTrackData>>,
     /// Pass events from our client to the main server
-    pub client_events_in: Sender<ClientMessage>,
+    pub client_events_in: Sender<ClientMessageChannelType>,
     /// Get mocap events to transmit out to our clients
     pub audience_mocap_out: Option<Receiver<OscData>>,
 
@@ -139,8 +140,9 @@ pub trait VRLClient {
         {
             let client_event_chan = self.channels().client_events_in.clone();
             let client_sock_chan = self.channels_mut().client_event_socket_chan.take().unwrap();
+            let user_id = self.user_data().participant_id;
             tokio::spawn(async move {
-                Self::client_event_listener("Client event", client_event_chan, client_sock_chan).await
+                Self::client_event_listener("Client event", user_id, client_event_chan, client_sock_chan).await
             });
 
             let backing_track_chan = self.channels_mut().backing_track_in.take().unwrap();
@@ -308,7 +310,7 @@ pub trait VRLClient {
     }
     
     /// Thread handling input for any client events.
-    async fn client_event_listener(label: &'static str, client_events_out: Sender<ClientMessage>, mut stream_sock: Receiver<TcpStream>) {
+    async fn client_event_listener(label: &'static str, user_id: UserIDType, client_events_out: Sender<ClientMessageChannelType>, mut stream_sock: Receiver<TcpStream>) {
 
         // loop: if we lose connection, we can just have the client give us a new handle.
         // unless that one's dead too.
@@ -378,7 +380,7 @@ pub trait VRLClient {
                     let packets = Vec::from_iter(packets.into_iter());
 
                     for pkt in packets {
-                        let _ = client_events_out.send(pkt).await;
+                        let _ = client_events_out.send((user_id, pkt)).await;
                     }
                 }
             }

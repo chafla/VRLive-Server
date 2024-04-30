@@ -1,6 +1,6 @@
 [workspace]
 
-members = ["protocol", "server", "osc_parser"]
+members = ["protocol", "server"]
 default-members = ["protocol"]
 
 [package]
